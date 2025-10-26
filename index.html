@@ -95,7 +95,17 @@
       </header>
       <section class="chat__messages" id="chat-messages" role="log" aria-live="polite"></section>
       <footer class="chat__composer" id="chat-composer" hidden>
-        <button class="icon-button" id="emoji-button" aria-label="Insert emoji">😊</button>
+        <button
+          class="icon-button"
+          id="emoji-button"
+          aria-label="Insert emoji"
+          aria-haspopup="true"
+          aria-expanded="false"
+          aria-controls="emoji-picker"
+        >
+          😊
+        </button>
+        <div class="emoji-picker" id="emoji-picker" role="menu" hidden></div>
         <textarea id="message-input" placeholder="Type a message" rows="1" aria-label="Message input"></textarea>
         <button class="icon-button icon-button--send" id="send-button" aria-label="Send message">➤</button>
       </footer>
