@@ -33,6 +33,21 @@
           </button>
         </div>
       </header>
+      <button
+        class="sidebar__profile"
+        id="user-profile-button"
+        type="button"
+        title="View profile"
+        aria-label="Open profile"
+      >
+        <div class="sidebar__profile-avatar" id="user-profile-avatar" aria-hidden="true">
+          JT
+        </div>
+        <div class="sidebar__profile-details">
+          <span class="sidebar__profile-name" id="user-profile-name">Jordan Taylor</span>
+          <span class="sidebar__profile-about" id="user-profile-about">Available</span>
+        </div>
+      </button>
       <div class="sidebar__search">
         <input type="text" id="chat-search" placeholder="Search or start new chat" aria-label="Search chats" />
       </div>
@@ -224,6 +239,66 @@
       </div>
     </article>
   </template>
+
+  <div class="modal" id="profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-title" hidden>
+    <div class="modal__backdrop" data-close-modal></div>
+    <div class="modal__content" role="document">
+      <header class="modal__header">
+        <h2 class="modal__title" id="profile-title">Profile</h2>
+        <button class="icon-button modal__close" id="profile-close" aria-label="Close profile">✕</button>
+      </header>
+      <form class="profile" id="profile-form">
+        <div class="profile__header">
+          <div class="profile__avatar" id="profile-modal-avatar" aria-hidden="true">JT</div>
+          <div class="profile__summary">
+            <div class="profile__summary-name" id="profile-summary-name">Jordan Taylor</div>
+            <div class="profile__summary-about" id="profile-summary-about">Available</div>
+          </div>
+        </div>
+        <div class="profile__fields">
+          <label class="profile__field">
+            <span class="profile__label">Name</span>
+            <input
+              id="profile-name"
+              class="profile__input"
+              name="name"
+              type="text"
+              maxlength="40"
+              autocomplete="name"
+              required
+            />
+            <span class="profile__description">This is your display name.</span>
+          </label>
+          <label class="profile__field">
+            <span class="profile__label">About</span>
+            <textarea
+              id="profile-about"
+              class="profile__input profile__input--textarea"
+              name="about"
+              rows="2"
+              maxlength="140"
+            ></textarea>
+            <span class="profile__description">Share a short status so contacts know what's up.</span>
+          </label>
+          <label class="profile__field">
+            <span class="profile__label">Phone</span>
+            <input
+              id="profile-phone"
+              class="profile__input"
+              name="phone"
+              type="tel"
+              autocomplete="tel"
+            />
+            <span class="profile__description">Displayed only to you in this demo.</span>
+          </label>
+        </div>
+        <div class="profile__actions">
+          <button type="button" class="profile__button profile__button--secondary" id="profile-cancel">Cancel</button>
+          <button type="submit" class="profile__button profile__button--primary">Save changes</button>
+        </div>
+      </form>
+    </div>
+  </div>
 
   <div class="modal" id="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" hidden>
     <div class="modal__backdrop" data-close-modal></div>

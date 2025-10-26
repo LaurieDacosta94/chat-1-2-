@@ -42,6 +42,20 @@ const themeInputs = settingsForm
 const wallpaperInputs = settingsForm
   ? Array.from(settingsForm.querySelectorAll('input[name="wallpaper"]'))
   : [];
+const profileButton = document.getElementById("user-profile-button");
+const profileAvatarElement = document.getElementById("user-profile-avatar");
+const profileNameElement = document.getElementById("user-profile-name");
+const profileAboutElement = document.getElementById("user-profile-about");
+const profileModal = document.getElementById("profile-modal");
+const profileCloseButton = document.getElementById("profile-close");
+const profileForm = document.getElementById("profile-form");
+const profileNameInput = document.getElementById("profile-name");
+const profileAboutInput = document.getElementById("profile-about");
+const profilePhoneInput = document.getElementById("profile-phone");
+const profileModalAvatarElement = document.getElementById("profile-modal-avatar");
+const profileSummaryNameElement = document.getElementById("profile-summary-name");
+const profileSummaryAboutElement = document.getElementById("profile-summary-about");
+const profileCancelButton = document.getElementById("profile-cancel");
 
 const chatItemTemplate = document.getElementById("chat-item-template");
 const messageTemplate = document.getElementById("message-template");
@@ -51,6 +65,7 @@ const DRAFTS_STORAGE_KEY = "whatsapp-clone-drafts-v1";
 const THEME_STORAGE_KEY = "whatsapp-clone-theme";
 const WALLPAPER_STORAGE_KEY = "whatsapp-clone-wallpaper";
 const ATTACHMENT_DRAFTS_STORAGE_KEY = "whatsapp-clone-attachment-drafts-v1";
+const PROFILE_STORAGE_KEY = "whatsapp-clone-profile-v1";
 const MAX_COMPOSER_ATTACHMENTS = 6;
 
 const Theme = {
@@ -70,6 +85,12 @@ const AttachmentKind = {
   VIDEO: "video",
   AUDIO: "audio",
   FILE: "file",
+};
+
+const defaultProfile = {
+  name: "Jordan Taylor",
+  about: "Available",
+  phone: "+1 (555) 010-3498",
 };
 
 const MessageStatus = {
@@ -646,6 +667,184 @@ function saveAttachmentDrafts(state) {
   localStorage.setItem(ATTACHMENT_DRAFTS_STORAGE_KEY, JSON.stringify(state));
 }
 
+function normalizeProfile(value) {
+  if (typeof value !== "object" || value === null) {
+    return { ...defaultProfile };
+  }
+
+  const name = String(value.name ?? "").trim();
+  const about = String(value.about ?? "").trim();
+  const phone = String(value.phone ?? "").trim();
+
+  return {
+    name: name || defaultProfile.name,
+    about,
+    phone,
+  };
+}
+
+function loadProfile() {
+  try {
+    const raw = localStorage.getItem(PROFILE_STORAGE_KEY);
+    if (!raw) return { ...defaultProfile };
+    const parsed = JSON.parse(raw);
+    return normalizeProfile(parsed);
+  } catch (error) {
+    console.error("Failed to load profile", error);
+    return { ...defaultProfile };
+  }
+}
+
+function saveProfile(profile) {
+  localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profile));
+}
+
+function getInitials(name = "") {
+  const trimmed = name.trim();
+  if (!trimmed) return "JT";
+  const parts = trimmed.split(/\s+/).filter(Boolean);
+  if (!parts.length) return "JT";
+  if (parts.length === 1) {
+    return parts[0].slice(0, 2).toUpperCase();
+  }
+  const first = parts[0][0] ?? "";
+  const last = parts[parts.length - 1][0] ?? "";
+  return `${first}${last}`.toUpperCase();
+}
+
+function populateProfileForm(profile = activeProfile) {
+  if (!profileForm) return;
+  const nextProfile = profile ?? activeProfile ?? { ...defaultProfile };
+  if (profileNameInput) {
+    profileNameInput.value = nextProfile.name ?? defaultProfile.name;
+  }
+  if (profileAboutInput) {
+    profileAboutInput.value = nextProfile.about ?? "";
+  }
+  if (profilePhoneInput) {
+    profilePhoneInput.value = nextProfile.phone ?? "";
+  }
+}
+
+function updateProfileUI(profile = activeProfile) {
+  const nextProfile = profile ?? activeProfile ?? { ...defaultProfile };
+  const initials = getInitials(nextProfile.name);
+
+  if (profileAvatarElement) {
+    profileAvatarElement.textContent = initials;
+  }
+  if (profileModalAvatarElement) {
+    profileModalAvatarElement.textContent = initials;
+  }
+  if (profileNameElement) {
+    profileNameElement.textContent = nextProfile.name;
+  }
+  if (profileSummaryNameElement) {
+    profileSummaryNameElement.textContent = nextProfile.name;
+  }
+  const aboutCopy = nextProfile.about?.trim() || defaultProfile.about;
+  if (profileAboutElement) {
+    profileAboutElement.textContent = aboutCopy;
+  }
+  if (profileSummaryAboutElement) {
+    profileSummaryAboutElement.textContent = aboutCopy;
+  }
+  if (profileButton) {
+    profileButton.setAttribute("aria-label", `Open profile for ${nextProfile.name}`);
+    profileButton.title = `${nextProfile.name}'s profile`;
+  }
+}
+
+function openProfile() {
+  if (!profileModal || !profileButton) return;
+  if (!profileModal.hidden) return;
+
+  if (settingsModal && !settingsModal.hidden) {
+    closeSettings({ restoreFocus: false });
+  }
+
+  profileRestoreFocusTo =
+    document.activeElement instanceof HTMLElement ? document.activeElement : profileButton;
+
+  populateProfileForm(activeProfile);
+  updateProfileUI(activeProfile);
+
+  profileModal.hidden = false;
+  document.body.classList.add("modal-open");
+
+  const focusTarget = profileNameInput ?? profileModal.querySelector("input, textarea, button");
+  if (focusTarget instanceof HTMLElement) {
+    focusTarget.focus();
+  }
+}
+
+function closeProfile({ restoreFocus = true } = {}) {
+  if (!profileModal) return;
+  if (profileModal.hidden) return;
+
+  profileModal.hidden = true;
+  if (!settingsModal || settingsModal.hidden) {
+    document.body.classList.remove("modal-open");
+  }
+
+  const restoreTarget = profileRestoreFocusTo;
+  profileRestoreFocusTo = null;
+
+  if (!restoreFocus) return;
+
+  if (restoreTarget instanceof HTMLElement) {
+    restoreTarget.focus();
+  } else if (profileButton) {
+    profileButton.focus();
+  }
+}
+
+function trapProfileFocus(event) {
+  if (!profileModal || profileModal.hidden) return;
+  if (event.key !== "Tab") return;
+
+  const focusableSelectors =
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  const focusable = Array.from(profileModal.querySelectorAll(focusableSelectors)).filter(
+    (element) =>
+      element instanceof HTMLElement &&
+      !element.hasAttribute("data-close-modal") &&
+      element.offsetParent !== null
+  );
+
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+
+  if (event.shiftKey) {
+    if (document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    }
+  } else if (document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function handleProfileSubmit(event) {
+  event.preventDefault();
+  if (!profileForm) return;
+
+  const nextProfile = normalizeProfile({
+    name: profileNameInput?.value,
+    about: profileAboutInput?.value,
+    phone: profilePhoneInput?.value,
+  });
+
+  activeProfile = nextProfile;
+  saveProfile(activeProfile);
+  updateProfileUI(activeProfile);
+  populateProfileForm(activeProfile);
+  showToast("Profile updated");
+  closeProfile();
+}
+
 function getDraft(chatId) {
   if (!chatId) return "";
   return drafts[chatId] ?? "";
@@ -889,11 +1088,13 @@ function resumePendingStatuses() {
 let chats = loadState();
 let drafts = loadDrafts();
 let attachmentDrafts = loadAttachmentDrafts();
+let activeProfile = loadProfile();
 let activeTheme = loadTheme();
 let activeWallpaper = loadWallpaper();
 let activeChatId = null;
 let activeFilter = Filter.ALL;
 let settingsRestoreFocusTo = null;
+let profileRestoreFocusTo = null;
 let pendingAttachments = [];
 
 function getActiveChat() {
@@ -2174,6 +2375,7 @@ function setupKeyboardShortcuts() {
 function openSettings() {
   if (!settingsModal) return;
   if (!settingsModal.hidden) return;
+  closeProfile({ restoreFocus: false });
   settingsRestoreFocusTo =
     document.activeElement instanceof HTMLElement ? document.activeElement : null;
   settingsModal.hidden = false;
@@ -2192,13 +2394,16 @@ function openSettings() {
   }
 }
 
-function closeSettings() {
+function closeSettings({ restoreFocus = true } = {}) {
   if (!settingsModal) return;
   if (settingsModal.hidden) return;
   settingsModal.hidden = true;
-  document.body.classList.remove("modal-open");
+  if (!profileModal || profileModal.hidden) {
+    document.body.classList.remove("modal-open");
+  }
   const restoreTarget = settingsRestoreFocusTo;
   settingsRestoreFocusTo = null;
+  if (!restoreFocus) return;
   if (restoreTarget instanceof HTMLElement) {
     restoreTarget.focus();
   } else if (settingsButton) {
@@ -2239,6 +2444,7 @@ function hydrate() {
   applyWallpaper(activeWallpaper);
   updateThemeControls(activeTheme);
   updateWallpaperControls(activeWallpaper);
+  updateProfileUI(activeProfile);
   updateFilterChips();
   renderChats();
   pruneDrafts();
@@ -2303,6 +2509,28 @@ function hydrate() {
     });
   });
 
+  if (profileButton) {
+    profileButton.addEventListener("click", openProfile);
+  }
+  if (profileCloseButton) {
+    profileCloseButton.addEventListener("click", () => closeProfile());
+  }
+  if (profileCancelButton) {
+    profileCancelButton.addEventListener("click", () => closeProfile());
+  }
+  if (profileForm) {
+    profileForm.addEventListener("submit", handleProfileSubmit);
+  }
+  if (profileModal) {
+    profileModal.addEventListener("click", (event) => {
+      const target = event.target;
+      if (target instanceof HTMLElement && target.hasAttribute("data-close-modal")) {
+        closeProfile();
+      }
+    });
+    profileModal.addEventListener("keydown", trapProfileFocus);
+  }
+
   if (settingsButton) {
     settingsButton.addEventListener("click", openSettings);
   }
@@ -2354,12 +2582,17 @@ function hydrate() {
       chats = loadState();
       drafts = loadDrafts();
       attachmentDrafts = loadAttachmentDrafts();
+      activeProfile = loadProfile();
       activeTheme = loadTheme();
       applyTheme(activeTheme);
       updateThemeControls(activeTheme);
       activeWallpaper = loadWallpaper();
       applyWallpaper(activeWallpaper);
       updateWallpaperControls(activeWallpaper);
+      updateProfileUI(activeProfile);
+      if (profileModal && !profileModal.hidden) {
+        populateProfileForm(activeProfile);
+      }
       pruneDrafts();
       pruneAttachmentDrafts();
       pendingAttachments = activeChatId ? getAttachmentDraft(activeChatId) : [];
@@ -2382,6 +2615,12 @@ function hydrate() {
     if (isEmojiPickerOpen) {
       event.preventDefault();
       closeEmojiPicker({ restoreFocus: true });
+      return;
+    }
+
+    if (profileModal && !profileModal.hidden) {
+      event.preventDefault();
+      closeProfile();
       return;
     }
 
