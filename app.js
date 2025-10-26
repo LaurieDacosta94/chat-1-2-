@@ -19,19 +19,31 @@ const filterCountElements = {
   starred: document.querySelector('[data-filter-count="starred"]'),
   archived: document.querySelector('[data-filter-count="archived"]'),
 };
-
 const settingsButton = document.getElementById("settings-button");
 const settingsModal = document.getElementById("settings-modal");
-const closeSettingsButton = document.getElementById("close-settings-button");
-const themeInputs = Array.from(document.querySelectorAll('input[name="theme"]'));
-const densityInputs = Array.from(document.querySelectorAll('input[name="density"]'));
-const reduceMotionToggle = document.getElementById("reduce-motion-toggle");
+const settingsCloseButton = document.getElementById("settings-close");
+const settingsForm = document.getElementById("settings-form");
+const themeInputs = settingsForm
+  ? Array.from(settingsForm.querySelectorAll('input[name="theme"]'))
+  : [];
 
 const chatItemTemplate = document.getElementById("chat-item-template");
 const messageTemplate = document.getElementById("message-template");
 
 const STORAGE_KEY = "whatsapp-clone-state-v1";
-const PREFERENCES_KEY = "whatsapp-clone-preferences-v1";
+const DRAFTS_STORAGE_KEY = "whatsapp-clone-drafts-v1";
+const THEME_STORAGE_KEY = "whatsapp-clone-theme";
+
+const Theme = {
+  DARK: "dark",
+  LIGHT: "light",
+};
+
+const MessageStatus = {
+  SENT: "sent",
+  DELIVERED: "delivered",
+  READ: "read",
+};
 
 const initialData = [
   {
@@ -48,6 +60,7 @@ const initialData = [
         direction: "outgoing",
         sentAt: "2024-02-21T09:20:00.000Z",
         timestamp: "09:20",
+        status: "read",
       },
       {
         id: "m2",
@@ -62,6 +75,7 @@ const initialData = [
         direction: "outgoing",
         sentAt: "2024-02-21T09:24:00.000Z",
         timestamp: "09:24",
+        status: "read",
       },
     ],
   },
@@ -86,6 +100,7 @@ const initialData = [
         direction: "outgoing",
         sentAt: "2024-02-20T09:02:00.000Z",
         timestamp: "09:02",
+        status: "read",
       },
     ],
   },
@@ -127,6 +142,7 @@ const initialData = [
         direction: "outgoing",
         sentAt: "2024-02-19T08:41:00.000Z",
         timestamp: "08:41",
+        status: "read",
       },
     ],
   },
@@ -138,28 +154,7 @@ const Filter = {
   ARCHIVED: "archived",
 };
 
-const systemThemeQuery =
-  typeof window !== "undefined" && typeof window.matchMedia === "function"
-    ? window.matchMedia("(prefers-color-scheme: light)")
-    : null;
-
-const defaultPreferences = {
-  theme: "system",
-  density: "comfortable",
-  reduceMotion: false,
-};
-
-function detectSystemTheme() {
-  if (!systemThemeQuery) return "dark";
-  return systemThemeQuery.matches ? "light" : "dark";
-}
-
-function resolveTheme(themePreference) {
-  if (themePreference === "light" || themePreference === "dark") {
-    return themePreference;
-  }
-  return detectSystemTheme();
-}
+const messageStatusTimers = new Map();
 
 function deriveISOFromLegacyTimestamp(timestamp) {
   if (!timestamp || typeof timestamp !== "string") {
@@ -182,40 +177,6 @@ function formatTimeFromDate(date = new Date()) {
     .replace(/^0/, "");
 }
 
-function loadPreferences() {
-  try {
-    const raw = localStorage.getItem(PREFERENCES_KEY);
-    if (!raw) return { ...defaultPreferences };
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") {
-      return { ...defaultPreferences };
-    }
-    return { ...defaultPreferences, ...parsed };
-  } catch (error) {
-    console.error("Failed to load preferences", error);
-    return { ...defaultPreferences };
-  }
-}
-
-function savePreferences(state) {
-  localStorage.setItem(PREFERENCES_KEY, JSON.stringify(state));
-}
-
-function applyPreferences(currentPreferences) {
-  const root = document.documentElement;
-  const resolvedTheme = resolveTheme(currentPreferences.theme);
-  root.dataset.theme = resolvedTheme;
-  root.dataset.themePreference = currentPreferences.theme;
-  root.dataset.motion = currentPreferences.reduceMotion ? "reduced" : "standard";
-  document.body.dataset.density = currentPreferences.density;
-
-  if (currentPreferences.reduceMotion) {
-    document.body.style.setProperty("scroll-behavior", "auto");
-  } else {
-    document.body.style.removeProperty("scroll-behavior");
-  }
-}
-
 function normalizeMessage(message) {
   if (!message) return null;
 
@@ -231,6 +192,14 @@ function normalizeMessage(message) {
     normalized.timestamp = formatTimeFromDate(fallback);
   } else if (!normalized.timestamp) {
     normalized.timestamp = formatTimeFromDate(parsedDate);
+  }
+
+  if (normalized.direction === "outgoing") {
+    if (!Object.values(MessageStatus).includes(normalized.status)) {
+      normalized.status = MessageStatus.READ;
+    }
+  } else if (normalized.status) {
+    delete normalized.status;
   }
 
   return normalized;
@@ -289,10 +258,28 @@ function formatMessageTimestamp(message) {
   return message.timestamp ?? "";
 }
 
+function getMessageStatusDetails(message) {
+  if (!message || message.direction !== "outgoing") {
+    return { icon: "", label: "", className: "" };
+  }
+
+  switch (message.status) {
+    case MessageStatus.DELIVERED:
+      return { icon: "✓✓", label: "Delivered", className: "" };
+    case MessageStatus.READ:
+      return { icon: "✓✓", label: "Read", className: "message__status--read" };
+    case MessageStatus.SENT:
+    default:
+      return { icon: "✓", label: "Sent", className: "" };
+  }
+}
+
 function formatMessagePreview(message) {
   if (!message) return "No messages yet";
   const prefix = message.direction === "outgoing" ? "You: " : "";
-  return `${prefix}${message.text}`;
+  const { icon } = getMessageStatusDetails(message);
+  const statusIcon = message.direction === "outgoing" && icon ? `${icon} ` : "";
+  return `${prefix}${statusIcon}${message.text}`;
 }
 
 function getMessageTimeValue(message) {
@@ -380,154 +367,185 @@ function saveState(state) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
-let preferences = loadPreferences();
-applyPreferences(preferences);
-let lastFocusedElementBeforeModal = null;
-
-function updatePreferenceControls() {
-  themeInputs.forEach((input) => {
-    input.checked = preferences.theme === input.value;
-  });
-
-  densityInputs.forEach((input) => {
-    input.checked = preferences.density === input.value;
-  });
-
-  if (reduceMotionToggle) {
-    reduceMotionToggle.checked = preferences.reduceMotion;
+function loadDrafts() {
+  try {
+    const raw = localStorage.getItem(DRAFTS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter(([, value]) => typeof value === "string")
+    );
+  } catch (error) {
+    console.error("Failed to load drafts", error);
+    return {};
   }
 }
 
-function openSettings() {
-  if (!settingsModal) return;
-  updatePreferenceControls();
-  lastFocusedElementBeforeModal =
-    document.activeElement instanceof HTMLElement ? document.activeElement : null;
-
-  settingsModal.hidden = false;
-  document.body.classList.add("modal-open");
-  requestAnimationFrame(() => {
-    settingsModal.classList.add("modal--visible");
-  });
-
-  const initialFocus =
-    settingsModal.querySelector("input:checked") ?? settingsModal.querySelector("input");
-  if (initialFocus instanceof HTMLElement) {
-    initialFocus.focus();
-  }
+function saveDrafts(state) {
+  localStorage.setItem(DRAFTS_STORAGE_KEY, JSON.stringify(state));
 }
 
-function closeSettings({ restoreFocus = true } = {}) {
-  if (!settingsModal || settingsModal.hidden) return;
-
-  const finalize = () => {
-    settingsModal.hidden = true;
-    settingsModal.removeEventListener("transitionend", finalize);
-  };
-
-  settingsModal.classList.remove("modal--visible");
-
-  if (preferences.reduceMotion) {
-    finalize();
-  } else {
-    settingsModal.addEventListener("transitionend", finalize);
-    window.setTimeout(finalize, 260);
-  }
-
-  document.body.classList.remove("modal-open");
-
-  if (restoreFocus) {
-    const fallback =
-      lastFocusedElementBeforeModal && typeof lastFocusedElementBeforeModal.focus === "function"
-        ? lastFocusedElementBeforeModal
-        : settingsButton;
-    fallback?.focus?.();
-  }
-
-  lastFocusedElementBeforeModal = null;
+function getDraft(chatId) {
+  if (!chatId) return "";
+  return drafts[chatId] ?? "";
 }
 
-function commitPreferences(partial) {
-  const previous = preferences;
-  preferences = { ...preferences, ...partial };
-  savePreferences(preferences);
-  applyPreferences(preferences);
-  updatePreferenceControls();
-
-  if (
-    partial.density &&
-    previous.density &&
-    partial.density !== previous.density &&
-    document.body.contains(messageInput)
-  ) {
-    autoResizeTextarea();
+function setDraft(chatId, value) {
+  if (!chatId) return;
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed) {
+    if (drafts[chatId]) {
+      delete drafts[chatId];
+      saveDrafts(drafts);
+    }
+    return;
   }
+
+  drafts[chatId] = value;
+  saveDrafts(drafts);
 }
 
-function initializePreferences() {
-  if (settingsButton) {
-    settingsButton.addEventListener("click", openSettings);
-  }
-
-  if (closeSettingsButton) {
-    closeSettingsButton.addEventListener("click", () => closeSettings());
-  }
-
-  if (settingsModal) {
-    settingsModal.addEventListener("click", (event) => {
-      const target = event.target;
-      if (target instanceof HTMLElement && target.hasAttribute("data-close-modal")) {
-        closeSettings();
-      }
-    });
-  }
-
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && settingsModal && !settingsModal.hidden) {
-      closeSettings();
+function pruneDrafts() {
+  const knownChatIds = new Set(chats.map((chat) => chat.id));
+  let changed = false;
+  Object.keys(drafts).forEach((chatId) => {
+    if (!knownChatIds.has(chatId)) {
+      delete drafts[chatId];
+      changed = true;
     }
   });
-
-  themeInputs.forEach((input) => {
-    input.addEventListener("change", () => {
-      if (!input.checked) return;
-      commitPreferences({ theme: input.value });
-    });
-  });
-
-  densityInputs.forEach((input) => {
-    input.addEventListener("change", () => {
-      if (!input.checked) return;
-      commitPreferences({ density: input.value });
-    });
-  });
-
-  if (reduceMotionToggle) {
-    reduceMotionToggle.addEventListener("change", () => {
-      commitPreferences({ reduceMotion: reduceMotionToggle.checked });
-    });
+  if (changed) {
+    saveDrafts(drafts);
   }
+}
 
-  if (systemThemeQuery) {
-    const handleSystemThemeChange = () => {
-      if (preferences.theme === "system") {
-        applyPreferences(preferences);
-      }
-    };
-
-    if (typeof systemThemeQuery.addEventListener === "function") {
-      systemThemeQuery.addEventListener("change", handleSystemThemeChange);
-    } else if (typeof systemThemeQuery.addListener === "function") {
-      systemThemeQuery.addListener(handleSystemThemeChange);
+function loadTheme() {
+  try {
+    const stored = localStorage.getItem(THEME_STORAGE_KEY);
+    if (stored && Object.values(Theme).includes(stored)) {
+      return stored;
     }
+  } catch (error) {
+    console.error("Failed to load theme", error);
+  }
+  return Theme.DARK;
+}
+
+function saveTheme(theme) {
+  localStorage.setItem(THEME_STORAGE_KEY, theme);
+}
+
+function applyTheme(theme) {
+  const nextTheme = Object.values(Theme).includes(theme) ? theme : Theme.DARK;
+  document.documentElement.dataset.theme = nextTheme;
+}
+
+function updateThemeControls(theme = activeTheme) {
+  themeInputs.forEach((input) => {
+    input.checked = input.value === theme;
+  });
+}
+
+function setTheme(theme) {
+  const nextTheme = Object.values(Theme).includes(theme) ? theme : Theme.DARK;
+  if (activeTheme === nextTheme) return;
+  activeTheme = nextTheme;
+  applyTheme(activeTheme);
+  updateThemeControls(activeTheme);
+  saveTheme(activeTheme);
+  showToast(
+    activeTheme === Theme.DARK ? "Switched to dark theme" : "Switched to light theme"
+  );
+}
+
+function clearMessageStatusTimers(messageId) {
+  const timers = messageStatusTimers.get(messageId);
+  if (!timers) return;
+  timers.forEach((timerId) => clearTimeout(timerId));
+  messageStatusTimers.delete(messageId);
+}
+
+function updateMessageStatus(chatId, messageId, nextStatus) {
+  if (!Object.values(MessageStatus).includes(nextStatus)) return;
+  const chat = chats.find((c) => c.id === chatId);
+  if (!chat) return;
+  const message = chat.messages.find((m) => m.id === messageId);
+  if (!message || message.direction !== "outgoing") return;
+  if (message.status === nextStatus) return;
+
+  message.status = nextStatus;
+  saveState(chats);
+  renderChats(chatSearchInput.value);
+  if (chat.id === activeChatId) {
+    renderChatView(chat);
   }
 
-  updatePreferenceControls();
+  if (nextStatus === MessageStatus.READ) {
+    clearMessageStatusTimers(messageId);
+  }
+}
+
+function scheduleMessageStatus(chatId, messageId, currentStatus = MessageStatus.SENT) {
+  clearMessageStatusTimers(messageId);
+
+  const timers = [];
+  const randomWithin = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+
+  if (currentStatus === MessageStatus.SENT) {
+    const deliveredDelay = randomWithin(700, 1300);
+    const readDelay = deliveredDelay + randomWithin(900, 1700);
+    timers.push(
+      setTimeout(() => updateMessageStatus(chatId, messageId, MessageStatus.DELIVERED), deliveredDelay)
+    );
+    timers.push(
+      setTimeout(() => updateMessageStatus(chatId, messageId, MessageStatus.READ), readDelay)
+    );
+  } else if (currentStatus === MessageStatus.DELIVERED) {
+    const readDelay = randomWithin(900, 1700);
+    timers.push(
+      setTimeout(() => updateMessageStatus(chatId, messageId, MessageStatus.READ), readDelay)
+    );
+  }
+
+  if (timers.length) {
+    messageStatusTimers.set(messageId, timers);
+  }
+}
+
+function resetMessageStatusTimers() {
+  Array.from(messageStatusTimers.values()).forEach((timers) => {
+    timers.forEach((timerId) => clearTimeout(timerId));
+  });
+  messageStatusTimers.clear();
+}
+
+function resumePendingStatuses() {
+  resetMessageStatusTimers();
+  let mutated = false;
+  chats.forEach((chat) => {
+    chat.messages.forEach((message) => {
+      if (message.direction !== "outgoing") return;
+      if (!Object.values(MessageStatus).includes(message.status)) {
+        message.status = MessageStatus.SENT;
+        mutated = true;
+      }
+      if (message.status !== MessageStatus.READ) {
+        scheduleMessageStatus(chat.id, message.id, message.status);
+      }
+    });
+  });
+  if (mutated) {
+    saveState(chats);
+  }
 }
 
 let chats = loadState();
+let drafts = loadDrafts();
+let activeTheme = loadTheme();
 let activeChatId = null;
 let activeFilter = Filter.ALL;
+let settingsRestoreFocusTo = null;
 
 function getActiveChat() {
   return chats.find((chat) => chat.id === activeChatId) ?? null;
@@ -608,12 +626,18 @@ function renderChats(searchText = "") {
     avatarNode.textContent = chat.avatar ?? chat.name.slice(0, 1).toUpperCase();
 
     const lastMessage = chat.messages.at(-1);
-    if (lastMessage) {
-      timestampNode.textContent = formatMessageTimestamp(lastMessage);
+    timestampNode.textContent = lastMessage ? formatMessageTimestamp(lastMessage) : "";
+
+    const draftText = getDraft(chat.id)?.trim();
+    if (draftText) {
+      previewNode.textContent = `Draft: ${draftText}`;
+      previewNode.classList.add("chat-item__preview--draft");
+    } else if (lastMessage) {
       previewNode.textContent = formatMessagePreview(lastMessage);
+      previewNode.classList.remove("chat-item__preview--draft");
     } else {
-      timestampNode.textContent = "";
       previewNode.textContent = "No messages yet";
+      previewNode.classList.remove("chat-item__preview--draft");
     }
 
     const metaIcons = [];
@@ -639,6 +663,8 @@ function renderChatView(chat) {
     chatHeaderElement.hidden = true;
     chatComposerElement.hidden = true;
     chatMessagesElement.innerHTML = "";
+    messageInput.value = "";
+    autoResizeTextarea();
     return;
   }
 
@@ -668,14 +694,57 @@ function renderChatView(chat) {
 
     const textNode = messageNode.querySelector(".message__text");
     const metaNode = messageNode.querySelector(".message__meta");
+    const timeNode = messageNode.querySelector(".message__time");
+    const statusNode = messageNode.querySelector(".message__status");
 
+    const formattedTime = formatMessageTimestamp(message);
     textNode.textContent = message.text;
-    metaNode.textContent = formatMessageTimestamp(message);
+
+    if (timeNode) {
+      timeNode.textContent = formattedTime;
+      if (message.sentAt) {
+        timeNode.dateTime = message.sentAt;
+      } else {
+        timeNode.removeAttribute("dateTime");
+      }
+    }
+
+    const accessibleParts = [];
+    if (formattedTime) {
+      accessibleParts.push(formattedTime);
+    }
+
+    if (statusNode) {
+      const { icon, label, className } = getMessageStatusDetails(message);
+      statusNode.textContent = icon ?? "";
+      statusNode.className = "message__status";
+      if (className) {
+        statusNode.classList.add(className);
+      }
+      if (message.direction === "outgoing" && label) {
+        statusNode.setAttribute("aria-label", label);
+        accessibleParts.unshift(label);
+      } else {
+        statusNode.removeAttribute("aria-label");
+      }
+    }
+
+    if (metaNode) {
+      if (accessibleParts.length) {
+        metaNode.setAttribute("aria-label", accessibleParts.join(", "));
+      } else {
+        metaNode.removeAttribute("aria-label");
+      }
+    }
 
     chatMessagesElement.appendChild(messageNode);
   });
 
   chatMessagesElement.scrollTop = chatMessagesElement.scrollHeight;
+
+  const draftValue = getDraft(chat.id) ?? "";
+  messageInput.value = draftValue;
+  autoResizeTextarea();
 }
 
 function openChat(chatId) {
@@ -691,12 +760,14 @@ function addMessageToChat(chatId, text, direction = "outgoing") {
   if (!chat) return { wasArchived: false };
 
   const sentAt = new Date();
+  const isOutgoing = direction === "outgoing";
   const newMessage = {
     id: crypto.randomUUID(),
     text,
     direction,
     sentAt: sentAt.toISOString(),
     timestamp: formatTimeFromDate(sentAt),
+    ...(isOutgoing ? { status: MessageStatus.SENT } : {}),
   };
   chat.messages.push(newMessage);
   chat.messages.sort((a, b) => getMessageTimeValue(a) - getMessageTimeValue(b));
@@ -707,6 +778,9 @@ function addMessageToChat(chatId, text, direction = "outgoing") {
   }
 
   saveState(chats);
+  if (isOutgoing) {
+    scheduleMessageStatus(chat.id, newMessage.id, newMessage.status);
+  }
   if (wasArchived && activeFilter === Filter.ARCHIVED) {
     setActiveFilter(Filter.ALL);
   } else {
@@ -753,7 +827,18 @@ function handleSend() {
   const { wasArchived } = addMessageToChat(chat.id, text, "outgoing");
   messageInput.value = "";
   autoResizeTextarea();
+  setDraft(chat.id, "");
+  renderChats(chatSearchInput.value);
   showToast(wasArchived ? "Conversation restored from archive" : "Message sent");
+}
+
+function handleMessageInput(event) {
+  autoResizeTextarea();
+  const chat = getActiveChat();
+  if (!chat) return;
+  const value = event.target.value;
+  setDraft(chat.id, value);
+  renderChats(chatSearchInput.value);
 }
 
 function handleNewChat() {
@@ -878,15 +963,79 @@ function setupKeyboardShortcuts() {
   });
 }
 
+function openSettings() {
+  if (!settingsModal) return;
+  if (!settingsModal.hidden) return;
+  settingsRestoreFocusTo =
+    document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  settingsModal.hidden = false;
+  document.body.classList.add("modal-open");
+  updateThemeControls(activeTheme);
+  const focusTarget =
+    themeInputs.find((input) => input.value === activeTheme) ??
+    themeInputs[0] ??
+    settingsCloseButton ??
+    settingsModal.querySelector("button, input");
+  if (focusTarget instanceof HTMLElement) {
+    focusTarget.focus();
+  }
+}
+
+function closeSettings() {
+  if (!settingsModal) return;
+  if (settingsModal.hidden) return;
+  settingsModal.hidden = true;
+  document.body.classList.remove("modal-open");
+  const restoreTarget = settingsRestoreFocusTo;
+  settingsRestoreFocusTo = null;
+  if (restoreTarget instanceof HTMLElement) {
+    restoreTarget.focus();
+  } else if (settingsButton) {
+    settingsButton.focus();
+  }
+}
+
+function trapSettingsFocus(event) {
+  if (!settingsModal || settingsModal.hidden) return;
+  if (event.key !== "Tab") return;
+
+  const focusableSelectors =
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  const focusable = Array.from(settingsModal.querySelectorAll(focusableSelectors)).filter(
+    (element) =>
+      element instanceof HTMLElement &&
+      !element.hasAttribute("data-close-modal") &&
+      element.offsetParent !== null
+  );
+
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+
+  if (event.shiftKey) {
+    if (document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    }
+  } else if (document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
 function hydrate() {
+  applyTheme(activeTheme);
+  updateThemeControls(activeTheme);
   updateFilterChips();
   renderChats();
+  pruneDrafts();
   renderChatView(null);
+  resumePendingStatuses();
 
   chatSearchInput.addEventListener("input", handleSearch);
   newChatButton.addEventListener("click", handleNewChat);
   sendButton.addEventListener("click", handleSend);
-  messageInput.addEventListener("input", autoResizeTextarea);
+  messageInput.addEventListener("input", handleMessageInput);
   toggleStarButton.addEventListener("click", toggleStar);
   toggleArchiveButton.addEventListener("click", toggleArchive);
   filterChips.forEach((chip) => {
@@ -895,18 +1044,50 @@ function hydrate() {
     });
   });
 
-  initializePreferences();
+  if (settingsButton) {
+    settingsButton.addEventListener("click", openSettings);
+  }
+  if (settingsCloseButton) {
+    settingsCloseButton.addEventListener("click", closeSettings);
+  }
+  if (settingsModal) {
+    settingsModal.addEventListener("click", (event) => {
+      const target = event.target;
+      if (target instanceof HTMLElement && target.hasAttribute("data-close-modal")) {
+        closeSettings();
+      }
+    });
+    settingsModal.addEventListener("keydown", trapSettingsFocus);
+  }
+  themeInputs.forEach((input) => {
+    input.addEventListener("change", (event) => {
+      const target = event.target;
+      if (target instanceof HTMLInputElement) {
+        setTheme(target.value);
+      }
+    });
+  });
+
   setupKeyboardShortcuts();
   setupMobileHeader();
 
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") {
       chats = loadState();
-      preferences = loadPreferences();
-      applyPreferences(preferences);
-      updatePreferenceControls();
+      drafts = loadDrafts();
+      activeTheme = loadTheme();
+      applyTheme(activeTheme);
+      updateThemeControls(activeTheme);
+      pruneDrafts();
       renderChats(chatSearchInput.value);
       renderChatView(getActiveChat());
+      resumePendingStatuses();
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && settingsModal && !settingsModal.hidden) {
+      closeSettings();
     }
   });
 
