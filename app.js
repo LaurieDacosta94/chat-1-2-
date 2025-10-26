@@ -14,6 +14,8 @@ const emojiButton = document.getElementById("emoji-button");
 const emojiPicker = document.getElementById("emoji-picker");
 const attachmentButton = document.getElementById("attachment-button");
 const attachmentInput = document.getElementById("attachment-input");
+const DEFAULT_ATTACHMENT_ACCEPT = attachmentInput?.getAttribute("accept") ?? "";
+const DEFAULT_ATTACHMENT_CAPTURE = attachmentInput?.getAttribute("capture") ?? null;
 const composerAttachmentsElement = document.getElementById("composer-attachments");
 const openMessageSearchButton = document.getElementById("open-message-search");
 const messageSearchContainer = document.getElementById("message-search");
@@ -77,6 +79,36 @@ const newContactEmailInput = document.getElementById("new-contact-email");
 const newContactEmailNameInput = document.getElementById("new-contact-email-name");
 const newContactCardNameInput = document.getElementById("new-contact-card-name");
 const newContactCardDetailsInput = document.getElementById("new-contact-card-details");
+const newGroupNameInput = document.getElementById("new-group-name");
+const newGroupParticipantsInput = document.getElementById("new-group-participants");
+const newGroupDescriptionInput = document.getElementById("new-group-description");
+const quickPhotoButton = document.getElementById("quick-photo");
+const quickVideoButton = document.getElementById("quick-video");
+const quickVoiceButton = document.getElementById("quick-voice");
+const voiceRecorderElement = document.getElementById("voice-recorder");
+const voiceRecorderStatusElement = document.getElementById("voice-recorder-status");
+const voiceRecorderTimerElement = document.getElementById("voice-recorder-timer");
+const voiceRecorderCancelButton = document.getElementById("voice-recorder-cancel");
+const voiceRecorderSendButton = document.getElementById("voice-recorder-send");
+const startAudioCallButton = document.getElementById("start-audio-call");
+const startVideoCallButton = document.getElementById("start-video-call");
+const startPhoneCallButton = document.getElementById("start-phone-call");
+const callPlanModal = document.getElementById("call-plan-modal");
+const callPlanForm = document.getElementById("call-plan-form");
+const callPlanCloseButton = document.getElementById("call-plan-close");
+const callPlanCancelButton = document.getElementById("call-plan-cancel");
+const callPlanSummaryElement = document.getElementById("call-plan-summary");
+const callPlanConfirmButton = document.getElementById("call-plan-confirm");
+const callOverlayElement = document.getElementById("call-overlay");
+const callOverlayBackdrop = document.getElementById("call-overlay-backdrop");
+const callOverlayCloseButton = document.getElementById("call-overlay-close");
+const callOverlayTypeElement = document.getElementById("call-overlay-type");
+const callOverlayAvatarElement = document.getElementById("call-overlay-avatar");
+const callOverlayNameElement = document.getElementById("call-overlay-name");
+const callOverlayStatusElement = document.getElementById("call-overlay-status");
+const callOverlayControlButtons = Array.from(
+  document.querySelectorAll("[data-call-control]")
+);
 
 const chatItemTemplate = document.getElementById("chat-item-template");
 const messageTemplate = document.getElementById("message-template");
@@ -113,6 +145,7 @@ const ContactMethod = {
   PHONE: "phone",
   EMAIL: "email",
   CONTACT_CARD: "contact-card",
+  GROUP: "group",
 };
 
 const ContactMethodLabels = {
@@ -120,6 +153,34 @@ const ContactMethodLabels = {
   [ContactMethod.PHONE]: "phone number",
   [ContactMethod.EMAIL]: "email address",
   [ContactMethod.CONTACT_CARD]: "contact share",
+  [ContactMethod.GROUP]: "group chat",
+};
+
+const ChatType = {
+  DIRECT: "direct",
+  GROUP: "group",
+};
+
+const CallType = {
+  AUDIO: "audio",
+  VIDEO: "video",
+  PHONE: "phone",
+};
+
+const CALL_TYPE_LABELS = {
+  [CallType.AUDIO]: "Audio call",
+  [CallType.VIDEO]: "Video call",
+  [CallType.PHONE]: "Phone call",
+};
+
+const CALL_PLAN_SUMMARIES = {
+  standard: "Unlimited domestic calling, HD audio quality.",
+  pro: "Global calling bundle, voicemail transcription, call analytics.",
+};
+
+const CALL_PLAN_LABELS = {
+  standard: "Standard plan",
+  pro: "Pro plan",
 };
 
 const CONTACT_STATUS_MAX_LENGTH = 140;
@@ -145,6 +206,16 @@ const initialData = [
     avatar: "PT",
     isStarred: true,
     isArchived: false,
+    type: ChatType.GROUP,
+    participants: [
+      "Jordan Taylor",
+      "Avery Shaw",
+      "Mia Chen",
+      "Sam Patel",
+      "Luis Gomez",
+    ],
+    description: "Sprint planning crew",
+    capabilities: { audio: true, video: true, phone: false },
     messages: [
       {
         id: "m1",
@@ -178,6 +249,10 @@ const initialData = [
     avatar: "DS",
     isStarred: false,
     isArchived: false,
+    type: ChatType.GROUP,
+    participants: ["Jordan Taylor", "Nora Ellis", "Kai Morgan", "Priya Das"],
+    description: "Concept feedback",
+    capabilities: { audio: true, video: true, phone: false },
     messages: [
       {
         id: "m4",
@@ -203,6 +278,8 @@ const initialData = [
     avatar: "JC",
     isStarred: false,
     isArchived: false,
+    type: ChatType.DIRECT,
+    capabilities: { audio: true, video: true, phone: true },
     messages: [
       {
         id: "m6",
@@ -220,6 +297,10 @@ const initialData = [
     avatar: "F",
     isStarred: false,
     isArchived: false,
+    type: ChatType.GROUP,
+    participants: ["Jordan Taylor", "Mom", "Dad", "Alex", "Grandma"],
+    description: "Weekend getaway",
+    capabilities: { audio: true, video: true, phone: false },
     messages: [
       {
         id: "m7",
@@ -322,6 +403,29 @@ function formatTimeFromDate(date = new Date()) {
     .replace(/^0/, "");
 }
 
+function formatVoiceDuration(seconds = 0) {
+  const totalSeconds = Math.max(0, Math.round(Number(seconds) || 0));
+  const minutes = Math.floor(totalSeconds / 60);
+  const remainder = totalSeconds % 60;
+  return `${minutes}:${remainder.toString().padStart(2, "0")}`;
+}
+
+function writeStringToDataView(view, offset, text) {
+  for (let index = 0; index < text.length; index += 1) {
+    view.setUint8(offset + index, text.charCodeAt(index));
+  }
+}
+
+function bytesToBase64(bytes) {
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
 function deriveAttachmentKind(type = "") {
   if (!type) return AttachmentKind.FILE;
   if (type.startsWith("image/")) return AttachmentKind.IMAGE;
@@ -406,13 +510,62 @@ function normalizeAttachment(attachment) {
     normalized.kind = deriveAttachmentKind(type);
   }
 
+  if (attachment.metadata && typeof attachment.metadata === "object") {
+    normalized.metadata = { ...attachment.metadata };
+  }
+
   return normalized;
 }
 
 function cloneAttachment(attachment) {
   const normalized = normalizeAttachment(attachment);
   if (!normalized) return null;
-  return { ...normalized };
+  return {
+    ...normalized,
+    ...(normalized.metadata ? { metadata: { ...normalized.metadata } } : {}),
+  };
+}
+
+function createVoiceNoteAttachment(durationSeconds = 12) {
+  const duration = Math.max(1, Math.round(Number(durationSeconds) || 0));
+  const sampleRate = 8000;
+  const totalSamples = duration * sampleRate;
+  const buffer = new ArrayBuffer(44 + totalSamples * 2);
+  const view = new DataView(buffer);
+
+  writeStringToDataView(view, 0, "RIFF");
+  view.setUint32(4, 36 + totalSamples * 2, true);
+  writeStringToDataView(view, 8, "WAVE");
+  writeStringToDataView(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeStringToDataView(view, 36, "data");
+  view.setUint32(40, totalSamples * 2, true);
+
+  let offset = 44;
+  for (let index = 0; index < totalSamples; index += 1) {
+    const amplitude = Math.sin((2 * Math.PI * 440 * index) / sampleRate) * 0.3;
+    view.setInt16(offset, amplitude * 0x7fff, true);
+    offset += 2;
+  }
+
+  const bytes = new Uint8Array(buffer);
+  const base64 = bytesToBase64(bytes);
+  const durationLabel = formatVoiceDuration(duration);
+  return normalizeAttachment({
+    id: crypto.randomUUID(),
+    name: `Voice note (${durationLabel}).wav`,
+    type: "audio/wav",
+    size: bytes.length,
+    dataUrl: `data:audio/wav;base64,${base64}`,
+    kind: AttachmentKind.AUDIO,
+    metadata: { voiceNoteDuration: duration },
+  });
 }
 
 function truncateText(text, maxLength = CONTACT_STATUS_MAX_LENGTH) {
@@ -429,6 +582,51 @@ function truncateText(text, maxLength = CONTACT_STATUS_MAX_LENGTH) {
 
 function sanitizeStatus(value) {
   return truncateText(value, CONTACT_STATUS_MAX_LENGTH);
+}
+
+function normalizeGroupParticipants(participants = []) {
+  return participants
+    .map((participant) =>
+      typeof participant === "string" ? participant.trim() : ""
+    )
+    .filter(Boolean)
+    .map((name) => truncateText(name, 60));
+}
+
+function deriveGroupStatus(participants = [], description = "") {
+  const normalizedParticipants = normalizeGroupParticipants(participants);
+  const sanitizedDescription = sanitizeStatus(description);
+  const parts = [];
+  if (sanitizedDescription) {
+    parts.push(sanitizedDescription);
+  }
+  if (normalizedParticipants.length) {
+    const countLabel = `${normalizedParticipants.length} participant${
+      normalizedParticipants.length === 1 ? "" : "s"
+    }`;
+    parts.push(countLabel);
+  }
+  if (parts.length) {
+    return parts.join(" • ");
+  }
+  if (normalizedParticipants.length) {
+    const preview = normalizedParticipants.slice(0, 3).join(", ");
+    const extra =
+      normalizedParticipants.length > 3
+        ? ` +${normalizedParticipants.length - 3}`
+        : "";
+    return sanitizeStatus(`${preview}${extra}`);
+  }
+  return "Group chat";
+}
+
+function buildGroupTooltip(chat) {
+  if (!chat || chat.type !== ChatType.GROUP) return "";
+  const names = normalizeGroupParticipants(chat.participants);
+  if (!names.length) {
+    return "Group chat";
+  }
+  return `Participants: ${names.join(", ")}`;
 }
 
 function normalizePhoneNumber(value) {
@@ -776,17 +974,45 @@ function normalizeChat(chat) {
   const statusCandidate =
     typeof chat.status === "string" ? chat.status.trim() : "";
   const sanitizedStatus = sanitizeStatus(statusCandidate);
+  const normalizedType =
+    chat.type === ChatType.GROUP ? ChatType.GROUP : ChatType.DIRECT;
+  const participants =
+    normalizedType === ChatType.GROUP
+      ? normalizeGroupParticipants(chat.participants)
+      : [];
+  const description =
+    normalizedType === ChatType.GROUP && typeof chat.description === "string"
+      ? sanitizeStatus(chat.description)
+      : "";
   const normalizedName =
     typeof chat.name === "string" && chat.name.trim()
       ? chat.name.trim()
       : normalizedContact?.displayName ?? "New chat";
 
+  const capabilities = {
+    audio:
+      !chat.capabilities || typeof chat.capabilities.audio === "undefined"
+        ? true
+        : Boolean(chat.capabilities.audio),
+    video:
+      !chat.capabilities || typeof chat.capabilities.video === "undefined"
+        ? true
+        : Boolean(chat.capabilities.video),
+    phone:
+      normalizedType === ChatType.GROUP
+        ? Boolean(chat.capabilities?.phone)
+        : !chat.capabilities || typeof chat.capabilities.phone === "undefined"
+        ? true
+        : Boolean(chat.capabilities.phone),
+  };
+
   return {
     ...chat,
     name: normalizedName || "New chat",
-    status: normalizedContact
-      ? sanitizedStatus || deriveContactStatus(normalizedContact)
-      : sanitizedStatus || "online",
+    status:
+      normalizedType === ChatType.GROUP
+        ? sanitizedStatus || deriveGroupStatus(participants, description)
+        : sanitizedStatus || (normalizedContact ? deriveContactStatus(normalizedContact) : "online"),
     avatar:
       chat.avatar ??
       ((normalizedName || "")
@@ -800,7 +1026,13 @@ function normalizeChat(chat) {
     isStarred: Boolean(chat.isStarred),
     isArchived: Boolean(chat.isArchived),
     messages: normalizedMessages,
-    ...(normalizedContact ? { contact: normalizedContact } : {}),
+    type: normalizedType,
+    participants,
+    description,
+    capabilities,
+    ...(normalizedContact && normalizedType !== ChatType.GROUP
+      ? { contact: normalizedContact }
+      : {}),
   };
 }
 
@@ -853,8 +1085,27 @@ function formatFileSize(bytes) {
   return `${size.toFixed(size >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
+function isVoiceNote(attachment) {
+  return Boolean(
+    attachment &&
+      typeof attachment === "object" &&
+      attachment.metadata &&
+      Number.isFinite(attachment.metadata.voiceNoteDuration)
+  );
+}
+
+function getVoiceNoteDurationSeconds(attachment) {
+  if (!isVoiceNote(attachment)) return 0;
+  const value = Number(attachment.metadata.voiceNoteDuration);
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(1, Math.round(value));
+}
+
 function getAttachmentLabel(attachment) {
   if (!attachment) return "Attachment";
+  if (isVoiceNote(attachment)) {
+    return "Voice message";
+  }
   switch (attachment.kind) {
     case AttachmentKind.IMAGE:
       return "Photo";
@@ -869,7 +1120,13 @@ function getAttachmentLabel(attachment) {
 
 function formatAttachmentSummary(attachments = []) {
   if (!attachments.length) return "";
-  const label = getAttachmentLabel(attachments[0]);
+  const [first, ...rest] = attachments;
+  if (isVoiceNote(first)) {
+    const duration = getVoiceNoteDurationSeconds(first);
+    const label = `Voice message (${formatVoiceDuration(duration)})`;
+    return rest.length ? `${label} +${rest.length}` : label;
+  }
+  const label = getAttachmentLabel(first);
   if (attachments.length === 1) {
     return label;
   }
@@ -1742,7 +1999,10 @@ function renderChats(searchText = "") {
     nameNode.textContent = chat.name;
     avatarNode.textContent = chat.avatar ?? chat.name.slice(0, 1).toUpperCase();
 
-    const tooltip = buildContactTooltip(chat.contact);
+    const tooltip =
+      chat.type === ChatType.GROUP
+        ? buildGroupTooltip(chat)
+        : buildContactTooltip(chat.contact);
     if (tooltip) {
       chatNode.setAttribute("title", `${chat.name} • ${tooltip}`);
     } else {
@@ -1852,13 +2112,21 @@ function createMessageAttachmentElement(attachment) {
 
     const name = document.createElement("div");
     name.className = "message__attachment-label";
-    name.textContent = normalized.name ?? getAttachmentLabel(normalized);
+    const isVoiceMessage = isVoiceNote(normalized);
+    name.textContent = isVoiceMessage
+      ? "Voice message"
+      : normalized.name ?? getAttachmentLabel(normalized);
     details.appendChild(name);
 
-    if (sizeText) {
-      const meta = document.createElement("div");
-      meta.className = "message__attachment-meta";
+    const meta = document.createElement("div");
+    meta.className = "message__attachment-meta";
+    if (isVoiceMessage) {
+      const durationSeconds = getVoiceNoteDurationSeconds(normalized);
+      meta.textContent = formatVoiceDuration(durationSeconds);
+    } else if (sizeText) {
       meta.textContent = sizeText;
+    }
+    if (meta.textContent) {
       details.appendChild(meta);
     }
 
@@ -2004,6 +2272,59 @@ function renderComposerAttachments() {
   });
 }
 
+function updateCallControls(chat) {
+  const type = chat?.type ?? ChatType.DIRECT;
+  const capabilities = chat?.capabilities ?? {};
+  const hasChat = Boolean(chat);
+  const audioEnabled = hasChat && capabilities.audio !== false;
+  const videoEnabled = hasChat && capabilities.video !== false;
+  const phoneEnabled =
+    hasChat && type !== ChatType.GROUP && capabilities.phone === true;
+
+  if (startAudioCallButton) {
+    startAudioCallButton.disabled = !audioEnabled;
+    startAudioCallButton.setAttribute(
+      "aria-disabled",
+      audioEnabled ? "false" : "true"
+    );
+    startAudioCallButton.title = audioEnabled
+      ? "Start audio call"
+      : hasChat
+      ? "Audio calling unavailable"
+      : "Select a chat to start an audio call";
+  }
+
+  if (startVideoCallButton) {
+    startVideoCallButton.disabled = !videoEnabled;
+    startVideoCallButton.setAttribute(
+      "aria-disabled",
+      videoEnabled ? "false" : "true"
+    );
+    startVideoCallButton.title = videoEnabled
+      ? "Start video call"
+      : hasChat
+      ? "Video calling unavailable"
+      : "Select a chat to start a video call";
+  }
+
+  if (startPhoneCallButton) {
+    startPhoneCallButton.disabled = !phoneEnabled;
+    startPhoneCallButton.setAttribute(
+      "aria-disabled",
+      phoneEnabled ? "false" : "true"
+    );
+    let title = "Start direct phone call";
+    if (!hasChat) {
+      title = "Select a chat to place a phone call";
+    } else if (type === ChatType.GROUP) {
+      title = "Direct phone calls are only available in 1:1 chats";
+    } else if (!phoneEnabled) {
+      title = "Direct phone calls unavailable";
+    }
+    startPhoneCallButton.title = title;
+  }
+}
+
 function renderChatView(chat) {
   if (!chat) {
     if (exportChatButton) {
@@ -2019,7 +2340,9 @@ function renderChatView(chat) {
     messageInput.value = "";
     autoResizeTextarea();
     pendingAttachments = [];
+    resetVoiceRecorder();
     renderComposerAttachments();
+    updateCallControls(null);
     if (isMessageSearchOpen) {
       isMessageSearchOpen = false;
       activeMessageSearchQuery = "";
@@ -2067,13 +2390,18 @@ function renderChatView(chat) {
 
   chatNameElement.textContent = chat.name;
   chatStatusElement.textContent = chat.status;
-  const contactTooltip = buildContactTooltip(chat.contact);
-  if (contactTooltip) {
-    chatStatusElement.setAttribute("title", contactTooltip);
+  const statusTooltip =
+    chat.type === ChatType.GROUP
+      ? buildGroupTooltip(chat)
+      : buildContactTooltip(chat.contact);
+  if (statusTooltip) {
+    chatStatusElement.setAttribute("title", statusTooltip);
   } else {
     chatStatusElement.removeAttribute("title");
   }
   chatAvatarElement.textContent = chat.avatar ?? chat.name.slice(0, 1).toUpperCase();
+
+  updateCallControls(chat);
 
   toggleStarButton.setAttribute(
     "aria-pressed",
@@ -2213,6 +2541,7 @@ function openChat(chatId) {
   if (activeChatId && activeChatId !== chatId) {
     setAttachmentDraft(activeChatId, pendingAttachments);
   }
+  resetVoiceRecorder();
   activeChatId = chatId;
   pendingAttachments = getAttachmentDraft(chatId);
   const chat = getActiveChat();
@@ -2267,9 +2596,42 @@ function addMessageToChat(chatId, text, direction = "outgoing", attachments = []
 }
 
 function createChat(nameInput, options = {}) {
-  const { status: statusOverride, contact: contactDetails, avatar: avatarOverride } =
-    options ?? {};
+  const {
+    status: statusOverride,
+    contact: contactDetails,
+    avatar: avatarOverride,
+    type: typeOverride,
+    participants: participantsOverride,
+    description: descriptionOverride,
+    capabilities: capabilitiesOverride,
+  } = options ?? {};
   const normalizedContact = normalizeContact(contactDetails);
+  const normalizedType =
+    typeOverride === ChatType.GROUP ? ChatType.GROUP : ChatType.DIRECT;
+  const participants =
+    normalizedType === ChatType.GROUP
+      ? normalizeGroupParticipants(participantsOverride)
+      : [];
+  const description =
+    normalizedType === ChatType.GROUP && typeof descriptionOverride === "string"
+      ? sanitizeStatus(descriptionOverride)
+      : "";
+  const capabilities = {
+    audio:
+      capabilitiesOverride && typeof capabilitiesOverride.audio !== "undefined"
+        ? Boolean(capabilitiesOverride.audio)
+        : true,
+    video:
+      capabilitiesOverride && typeof capabilitiesOverride.video !== "undefined"
+        ? Boolean(capabilitiesOverride.video)
+        : true,
+    phone:
+      normalizedType === ChatType.GROUP
+        ? Boolean(capabilitiesOverride?.phone)
+        : capabilitiesOverride && typeof capabilitiesOverride.phone !== "undefined"
+        ? Boolean(capabilitiesOverride.phone)
+        : true,
+  };
 
   const rawName = typeof nameInput === "string" ? nameInput.trim() : "";
   const fallbackName = normalizedContact?.displayName ?? "";
@@ -2318,15 +2680,21 @@ function createChat(nameInput, options = {}) {
     isStarred: false,
     isArchived: false,
     messages: [],
+    type: normalizedType,
+    participants,
+    description,
+    capabilities,
   };
 
-  if (normalizedContact) {
+  if (normalizedContact && normalizedType !== ChatType.GROUP) {
     newChat.contact = normalizedContact;
   }
 
   const sanitizedStatus = sanitizeStatus(statusOverride);
   if (sanitizedStatus) {
     newChat.status = sanitizedStatus;
+  } else if (normalizedType === ChatType.GROUP) {
+    newChat.status = deriveGroupStatus(participants, description);
   } else if (normalizedContact) {
     newChat.status = deriveContactStatus(normalizedContact);
   }
@@ -2435,6 +2803,12 @@ async function handleAttachmentSelection(event) {
 
   const files = Array.from(input.files ?? []);
   input.value = "";
+  input.setAttribute("accept", DEFAULT_ATTACHMENT_ACCEPT);
+  if (DEFAULT_ATTACHMENT_CAPTURE) {
+    input.setAttribute("capture", DEFAULT_ATTACHMENT_CAPTURE);
+  } else {
+    input.removeAttribute("capture");
+  }
   if (!files.length) return;
 
   const availableSlots = MAX_COMPOSER_ATTACHMENTS - pendingAttachments.length;
@@ -2488,6 +2862,397 @@ async function handleAttachmentSelection(event) {
   }
   renderComposerAttachments();
   renderChats(chatSearchInput.value);
+}
+
+function openAttachmentPicker({ accept = DEFAULT_ATTACHMENT_ACCEPT, capture = null } = {}) {
+  if (!attachmentInput) return;
+  const chat = getActiveChat();
+  if (!chat) {
+    showToast("Select a chat to add attachments");
+    return;
+  }
+  closeEmojiPicker();
+  if (accept) {
+    attachmentInput.setAttribute("accept", accept);
+  } else {
+    attachmentInput.setAttribute("accept", DEFAULT_ATTACHMENT_ACCEPT);
+  }
+  if (capture) {
+    attachmentInput.setAttribute("capture", capture);
+  } else if (DEFAULT_ATTACHMENT_CAPTURE) {
+    attachmentInput.setAttribute("capture", DEFAULT_ATTACHMENT_CAPTURE);
+  } else {
+    attachmentInput.removeAttribute("capture");
+  }
+  attachmentInput.click();
+}
+
+function updateVoiceRecorderTimer() {
+  if (!voiceRecorderIsActive || !voiceRecorderTimerElement) return;
+  const elapsed = Math.max(0, Math.round((Date.now() - voiceRecorderStartedAt) / 1000));
+  voiceRecorderTimerElement.textContent = formatVoiceDuration(elapsed);
+}
+
+function startVoiceRecorder() {
+  if (!voiceRecorderElement || voiceRecorderIsActive) return;
+  const chat = getActiveChat();
+  if (!chat) {
+    showToast("Select a chat to record a voice message");
+    return;
+  }
+
+  voiceRecorderIsActive = true;
+  voiceRecorderStartedAt = Date.now();
+  if (voiceRecorderTimerElement) {
+    voiceRecorderTimerElement.textContent = "0:00";
+  }
+  if (voiceRecorderStatusElement) {
+    voiceRecorderStatusElement.textContent = "Recording voice message…";
+  }
+  voiceRecorderElement.hidden = false;
+  voiceRecorderElement.setAttribute("aria-hidden", "false");
+
+  if (messageInput) {
+    messageInput.setAttribute("disabled", "true");
+    messageInput.blur();
+  }
+  if (sendButton) {
+    sendButton.setAttribute("disabled", "true");
+  }
+  if (quickVoiceButton) {
+    quickVoiceButton.setAttribute("aria-pressed", "true");
+  }
+
+  updateVoiceRecorderTimer();
+  voiceRecorderTimerId = window.setInterval(updateVoiceRecorderTimer, 500);
+}
+
+function stopVoiceRecorder({ send = false, suppressToast = false } = {}) {
+  const wasActive = voiceRecorderIsActive;
+  if (voiceRecorderTimerId) {
+    clearInterval(voiceRecorderTimerId);
+    voiceRecorderTimerId = null;
+  }
+  const elapsedSeconds = wasActive
+    ? Math.max(1, Math.round((Date.now() - voiceRecorderStartedAt) / 1000))
+    : 0;
+  voiceRecorderIsActive = false;
+  voiceRecorderStartedAt = 0;
+
+  if (voiceRecorderElement) {
+    voiceRecorderElement.hidden = true;
+    voiceRecorderElement.setAttribute("aria-hidden", "true");
+  }
+  if (voiceRecorderTimerElement) {
+    voiceRecorderTimerElement.textContent = "0:00";
+  }
+  if (voiceRecorderStatusElement) {
+    voiceRecorderStatusElement.textContent = "Recording voice message…";
+  }
+  if (quickVoiceButton) {
+    quickVoiceButton.setAttribute("aria-pressed", "false");
+  }
+  if (messageInput) {
+    messageInput.removeAttribute("disabled");
+    autoResizeTextarea();
+  }
+  if (sendButton) {
+    sendButton.removeAttribute("disabled");
+  }
+
+  if (send && elapsedSeconds > 0) {
+    const chat = getActiveChat();
+    if (!chat) {
+      if (!suppressToast) {
+        showToast("Select a chat to send voice messages");
+      }
+      return;
+    }
+    const attachment = createVoiceNoteAttachment(elapsedSeconds);
+    if (attachment) {
+      addMessageToChat(chat.id, "", "outgoing", [attachment]);
+      if (!suppressToast) {
+        showToast("Voice message sent");
+      }
+    }
+  } else if (wasActive && !suppressToast) {
+    showToast("Voice recording canceled");
+  }
+}
+
+function resetVoiceRecorder() {
+  stopVoiceRecorder({ suppressToast: true });
+}
+
+function updateCallPlanSummary(plan) {
+  if (!callPlanSummaryElement) return;
+  const summary = CALL_PLAN_SUMMARIES[plan] ?? CALL_PLAN_SUMMARIES.standard;
+  callPlanSummaryElement.textContent = summary;
+}
+
+function openCallPlanModal() {
+  if (!callPlanModal || !callPlanForm) return;
+  const chat = getActiveChat();
+  if (!chat) {
+    showToast("Select a chat to place a phone call");
+    return;
+  }
+  if (chat.type === ChatType.GROUP) {
+    showToast("Direct phone calls are only available in 1:1 chats");
+    return;
+  }
+  if (!callPlanModal.hidden) return;
+
+  if (profileModal && !profileModal.hidden) {
+    closeProfile({ restoreFocus: false });
+  }
+  if (settingsModal && !settingsModal.hidden) {
+    closeSettings({ restoreFocus: false });
+  }
+
+  callPlanRestoreFocusTo =
+    document.activeElement instanceof HTMLElement ? document.activeElement : startPhoneCallButton;
+
+  const selectedPlanInput = callPlanForm.querySelector('input[name="call-plan"]:checked');
+  const selectedPlan = selectedPlanInput instanceof HTMLInputElement ? selectedPlanInput.value : "standard";
+  updateCallPlanSummary(selectedPlan);
+
+  callPlanModal.hidden = false;
+  document.body.classList.add("modal-open");
+
+  if (selectedPlanInput instanceof HTMLInputElement) {
+    selectedPlanInput.focus();
+  }
+}
+
+function closeCallPlanModal({ restoreFocus = true } = {}) {
+  if (!callPlanModal || callPlanModal.hidden) return;
+
+  callPlanModal.hidden = true;
+  if (
+    (!newContactModal || newContactModal.hidden) &&
+    (!profileModal || profileModal.hidden) &&
+    (!settingsModal || settingsModal.hidden)
+  ) {
+    document.body.classList.remove("modal-open");
+  }
+
+  const restoreTarget = callPlanRestoreFocusTo;
+  callPlanRestoreFocusTo = null;
+
+  if (restoreFocus && restoreTarget instanceof HTMLElement) {
+    restoreTarget.focus();
+  }
+}
+
+function trapCallPlanFocus(event) {
+  if (!callPlanModal || callPlanModal.hidden) return;
+  if (event.key !== "Tab") return;
+
+  const focusableSelectors =
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  const focusable = Array.from(callPlanModal.querySelectorAll(focusableSelectors)).filter(
+    (element) =>
+      element instanceof HTMLElement &&
+      !element.hasAttribute("data-close-modal") &&
+      element.offsetParent !== null
+  );
+
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+
+  if (event.shiftKey) {
+    if (document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    }
+  } else if (document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function handleCallPlanSubmit(event) {
+  event.preventDefault();
+  if (!callPlanForm) return;
+  const formData = new FormData(callPlanForm);
+  const selectedPlan = (formData.get("call-plan") || "standard").toString();
+  closeCallPlanModal({ restoreFocus: false });
+  startCall(CallType.PHONE, { plan: selectedPlan });
+}
+
+function startCall(callType, { plan = null } = {}) {
+  const chat = getActiveChat();
+  if (!chat) {
+    showToast("Select a chat to start a call");
+    return;
+  }
+
+  const capabilities = chat.capabilities ?? {};
+  if (callType === CallType.AUDIO && capabilities.audio === false) {
+    showToast("Audio calling unavailable for this chat");
+    return;
+  }
+  if (callType === CallType.VIDEO && capabilities.video === false) {
+    showToast("Video calling unavailable for this chat");
+    return;
+  }
+  if (callType === CallType.PHONE) {
+    if (chat.type === ChatType.GROUP) {
+      showToast("Direct phone calls are only available in 1:1 chats");
+      return;
+    }
+    if (capabilities.phone !== true) {
+      showToast("Direct phone calls unavailable");
+      return;
+    }
+  }
+
+  openCallOverlay({ chat, type: callType, plan });
+}
+
+function updateCallOverlayTimer() {
+  if (!activeCall || !callOverlayStatusElement) return;
+  if (!activeCall.startedAt) {
+    callOverlayStatusElement.textContent = "Connecting…";
+    return;
+  }
+  const elapsed = Math.max(0, Math.round((Date.now() - activeCall.startedAt) / 1000));
+  callOverlayStatusElement.textContent = `Call in progress · ${formatVoiceDuration(elapsed)}`;
+}
+
+function openCallOverlay({ chat, type, plan = null }) {
+  if (!callOverlayElement) return;
+  if (callTimerInterval) {
+    clearInterval(callTimerInterval);
+    callTimerInterval = null;
+  }
+  if (callConnectionTimeout) {
+    clearTimeout(callConnectionTimeout);
+    callConnectionTimeout = null;
+  }
+
+  activeCall = {
+    chatId: chat.id,
+    type,
+    plan,
+    startedAt: null,
+  };
+
+  callOverlayControlButtons.forEach((button) => {
+    const action = button.dataset.callControl;
+    if (action === "mute" || action === "speaker") {
+      button.setAttribute("aria-pressed", "false");
+    }
+  });
+
+  const typeLabel = CALL_TYPE_LABELS[type] ?? "Call";
+  const planLabel = plan && CALL_PLAN_LABELS[plan] ? ` — ${CALL_PLAN_LABELS[plan]}` : "";
+  if (callOverlayTypeElement) {
+    callOverlayTypeElement.textContent = `${typeLabel}${planLabel}`;
+  }
+  if (callOverlayAvatarElement) {
+    callOverlayAvatarElement.textContent = chat.avatar ?? chat.name.slice(0, 2).toUpperCase();
+  }
+  if (callOverlayNameElement) {
+    callOverlayNameElement.textContent = chat.name;
+  }
+  if (callOverlayStatusElement) {
+    callOverlayStatusElement.textContent = "Connecting…";
+  }
+
+  callOverlayRestoreFocusTo =
+    document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+  callOverlayElement.hidden = false;
+  callOverlayElement.setAttribute("aria-hidden", "false");
+  if (callOverlayCloseButton) {
+    callOverlayCloseButton.focus();
+  }
+
+  callConnectionTimeout = window.setTimeout(() => {
+    if (!activeCall) return;
+    activeCall.startedAt = Date.now();
+    updateCallOverlayTimer();
+    callTimerInterval = window.setInterval(updateCallOverlayTimer, 1000);
+  }, 800);
+}
+
+function closeCallOverlay({ restoreFocus = true, showToastMessage } = {}) {
+  if (!callOverlayElement || callOverlayElement.hidden) return;
+
+  callOverlayElement.hidden = true;
+  callOverlayElement.setAttribute("aria-hidden", "true");
+  if (callTimerInterval) {
+    clearInterval(callTimerInterval);
+    callTimerInterval = null;
+  }
+  if (callConnectionTimeout) {
+    clearTimeout(callConnectionTimeout);
+    callConnectionTimeout = null;
+  }
+
+  callOverlayControlButtons.forEach((button) => {
+    const action = button.dataset.callControl;
+    if (action === "mute" || action === "speaker") {
+      button.setAttribute("aria-pressed", "false");
+    }
+  });
+
+  const restoreTarget = callOverlayRestoreFocusTo;
+  callOverlayRestoreFocusTo = null;
+  activeCall = null;
+
+  if (showToastMessage) {
+    showToast(showToastMessage);
+  }
+
+  if (restoreFocus && restoreTarget instanceof HTMLElement) {
+    restoreTarget.focus();
+  }
+}
+
+function endActiveCall({ reason = "Call ended", suppressToast = false } = {}) {
+  if (!activeCall) return;
+  closeCallOverlay({
+    restoreFocus: true,
+    showToastMessage: suppressToast ? undefined : reason,
+  });
+}
+
+function handleCallControl(event) {
+  const button = event.currentTarget;
+  if (!(button instanceof HTMLElement)) return;
+  const action = button.dataset.callControl;
+
+  if (!activeCall) {
+    showToast("No active call");
+    return;
+  }
+
+  switch (action) {
+    case "mute": {
+      const pressed = button.getAttribute("aria-pressed") === "true";
+      const next = !pressed;
+      button.setAttribute("aria-pressed", next ? "true" : "false");
+      showToast(next ? "Microphone muted" : "Microphone unmuted");
+      break;
+    }
+    case "speaker": {
+      const pressed = button.getAttribute("aria-pressed") === "true";
+      const next = !pressed;
+      button.setAttribute("aria-pressed", next ? "true" : "false");
+      showToast(next ? "Speakerphone on" : "Speakerphone off");
+      break;
+    }
+    case "end": {
+      endActiveCall({ reason: "Call ended" });
+      break;
+    }
+    default:
+      break;
+  }
 }
 
 function getActiveNewContactMethod() {
@@ -2548,6 +3313,38 @@ function resetNewContactForm() {
 function collectNewContactData({ strict = false, showErrors = false } = {}) {
   if (!newContactForm) return null;
   const method = getActiveNewContactMethod();
+  if (method === ContactMethod.GROUP) {
+    const name = newGroupNameInput?.value.trim() ?? "";
+    const rawParticipants = newGroupParticipantsInput?.value ?? "";
+    const description = newGroupDescriptionInput?.value.trim() ?? "";
+    const participants = rawParticipants
+      .split(/[\n,]/)
+      .map((value) => value.trim())
+      .filter(Boolean);
+
+    if (!name && strict) {
+      if (showErrors) {
+        showToast("Enter a group name");
+        newGroupNameInput?.focus();
+      }
+      return null;
+    }
+
+    if (participants.length < 2 && strict) {
+      if (showErrors) {
+        showToast("Add at least two participants");
+        newGroupParticipantsInput?.focus();
+      }
+      return null;
+    }
+
+    return {
+      method,
+      displayName: name || "New group",
+      participants,
+      description,
+    };
+  }
   const contact = { method };
 
   switch (method) {
@@ -2666,6 +3463,34 @@ function updateNewContactPreview() {
     return;
   }
 
+  if (contact.method === ContactMethod.GROUP) {
+    const displayName = contact.displayName || "New group";
+    const participants = Array.isArray(contact.participants)
+      ? contact.participants
+      : [];
+    const details = [];
+    const sanitizedDescription = sanitizeStatus(contact.description ?? "");
+    if (sanitizedDescription) {
+      details.push(sanitizedDescription);
+    }
+    if (participants.length) {
+      details.push(
+        `${participants.length} participant${participants.length === 1 ? "" : "s"}`
+      );
+    }
+    const description =
+      details.join(" • ") || "Create a space for everyone to stay in sync.";
+
+    newContactPreviewElement.innerHTML = "";
+    const nameNode = document.createElement("strong");
+    nameNode.textContent = displayName;
+    newContactPreviewElement.appendChild(nameNode);
+    const descriptionNode = document.createElement("span");
+    descriptionNode.textContent = description;
+    newContactPreviewElement.appendChild(descriptionNode);
+    return;
+  }
+
   const displayName = contact.displayName || "New contact";
   const status = getContactPreviewText(contact);
   const methodLabel = getContactMethodLabel(contact.method);
@@ -2767,6 +3592,25 @@ function handleNewContactSubmit(event) {
 
   const contact = collectNewContactData({ strict: true, showErrors: true });
   if (!contact) return;
+
+  if (contact.method === ContactMethod.GROUP) {
+    const participants = Array.isArray(contact.participants)
+      ? normalizeGroupParticipants(contact.participants)
+      : [];
+    const description = typeof contact.description === "string"
+      ? contact.description.trim()
+      : "";
+    const status = deriveGroupStatus(participants, description);
+    const chat = createChat(contact.displayName, {
+      type: ChatType.GROUP,
+      participants,
+      description,
+      status,
+    });
+    showToast(`Created group ${chat.name}`);
+    closeNewContactModal();
+    return;
+  }
 
   const status = deriveContactStatus(contact);
   const chat = createChat(contact.displayName, { status, contact });
@@ -2888,6 +3732,14 @@ let activeMessageSearchQuery = "";
 let messageSearchMatches = [];
 let activeMessageSearchIndex = 0;
 let shouldScrollToActiveSearchMatch = false;
+let voiceRecorderTimerId = null;
+let voiceRecorderStartedAt = 0;
+let voiceRecorderIsActive = false;
+let activeCall = null;
+let callTimerInterval = null;
+let callConnectionTimeout = null;
+let callPlanRestoreFocusTo = null;
+let callOverlayRestoreFocusTo = null;
 function showToast(message) {
   let toast = document.querySelector(".toast");
   if (!toast) {
@@ -3143,6 +3995,28 @@ function hydrate() {
   resumePendingStatuses();
   buildEmojiPicker();
 
+  resetVoiceRecorder();
+  if (callTimerInterval) {
+    clearInterval(callTimerInterval);
+    callTimerInterval = null;
+  }
+  if (callConnectionTimeout) {
+    clearTimeout(callConnectionTimeout);
+    callConnectionTimeout = null;
+  }
+  activeCall = null;
+  callOverlayRestoreFocusTo = null;
+  if (callOverlayElement) {
+    callOverlayElement.hidden = true;
+    callOverlayElement.setAttribute("aria-hidden", "true");
+  }
+  callOverlayControlButtons.forEach((button) => {
+    const action = button.dataset.callControl;
+    if (action === "mute" || action === "speaker") {
+      button.setAttribute("aria-pressed", "false");
+    }
+  });
+
   chatSearchInput.addEventListener("input", handleSearch);
   newChatButton.addEventListener("click", handleNewChat);
   sendButton.addEventListener("click", handleSend);
@@ -3159,6 +4033,35 @@ function hydrate() {
       attachmentInput.click();
     });
     attachmentInput.addEventListener("change", handleAttachmentSelection);
+  }
+  if (quickPhotoButton) {
+    quickPhotoButton.addEventListener("click", () => {
+      openAttachmentPicker({ accept: "image/*", capture: "environment" });
+    });
+  }
+  if (quickVideoButton) {
+    quickVideoButton.addEventListener("click", () => {
+      openAttachmentPicker({ accept: "video/*", capture: "environment" });
+    });
+  }
+  if (quickVoiceButton) {
+    quickVoiceButton.addEventListener("click", () => {
+      if (voiceRecorderIsActive) {
+        stopVoiceRecorder();
+      } else {
+        startVoiceRecorder();
+      }
+    });
+  }
+  if (voiceRecorderCancelButton) {
+    voiceRecorderCancelButton.addEventListener("click", () => {
+      stopVoiceRecorder();
+    });
+  }
+  if (voiceRecorderSendButton) {
+    voiceRecorderSendButton.addEventListener("click", () => {
+      stopVoiceRecorder({ send: true });
+    });
   }
   if (exportChatButton) {
     exportChatButton.addEventListener("click", exportActiveChat);
@@ -3265,6 +4168,52 @@ function hydrate() {
     });
     settingsModal.addEventListener("keydown", trapSettingsFocus);
   }
+  if (startAudioCallButton) {
+    startAudioCallButton.addEventListener("click", () => startCall(CallType.AUDIO));
+  }
+  if (startVideoCallButton) {
+    startVideoCallButton.addEventListener("click", () => startCall(CallType.VIDEO));
+  }
+  if (startPhoneCallButton) {
+    startPhoneCallButton.addEventListener("click", openCallPlanModal);
+  }
+  if (callPlanForm) {
+    callPlanForm.addEventListener("submit", handleCallPlanSubmit);
+    callPlanForm.addEventListener("change", (event) => {
+      const target = event.target;
+      if (target instanceof HTMLInputElement && target.name === "call-plan") {
+        updateCallPlanSummary(target.value);
+      }
+    });
+  }
+  if (callPlanCloseButton) {
+    callPlanCloseButton.addEventListener("click", () => closeCallPlanModal());
+  }
+  if (callPlanCancelButton) {
+    callPlanCancelButton.addEventListener("click", () => closeCallPlanModal());
+  }
+  if (callPlanModal) {
+    callPlanModal.addEventListener("click", (event) => {
+      const target = event.target;
+      if (target instanceof HTMLElement && target.hasAttribute("data-close-modal")) {
+        closeCallPlanModal();
+      }
+    });
+    callPlanModal.addEventListener("keydown", trapCallPlanFocus);
+  }
+  if (callOverlayCloseButton) {
+    callOverlayCloseButton.addEventListener("click", () => {
+      endActiveCall({ reason: "Call ended" });
+    });
+  }
+  if (callOverlayBackdrop) {
+    callOverlayBackdrop.addEventListener("click", () => {
+      endActiveCall({ reason: "Call ended" });
+    });
+  }
+  callOverlayControlButtons.forEach((button) => {
+    button.addEventListener("click", handleCallControl);
+  });
   themeInputs.forEach((input) => {
     input.addEventListener("change", (event) => {
       const target = event.target;
@@ -3346,6 +4295,18 @@ function hydrate() {
     if (profileModal && !profileModal.hidden) {
       event.preventDefault();
       closeProfile();
+      return;
+    }
+
+    if (callPlanModal && !callPlanModal.hidden) {
+      event.preventDefault();
+      closeCallPlanModal();
+      return;
+    }
+
+    if (callOverlayElement && !callOverlayElement.hidden) {
+      event.preventDefault();
+      endActiveCall({ reason: "Call ended" });
       return;
     }
 
