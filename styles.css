@@ -46,6 +46,18 @@
   box-sizing: border-box;
 }
 
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 body {
   margin: 0;
   font-family: var(--font-family);
@@ -322,6 +334,49 @@ body {
   gap: 0.5rem;
 }
 
+.chat__message-search {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.75rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--chat-background);
+}
+
+.chat__message-search input {
+  flex: 1 1 220px;
+  min-width: 160px;
+  padding: 0.65rem 0.9rem;
+  border-radius: 0.75rem;
+  border: 1px solid transparent;
+  background-color: var(--composer-input-background);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.95rem;
+}
+
+.chat__message-search input::placeholder {
+  color: var(--text-muted);
+}
+
+.chat__message-search input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.chat__message-search-clear {
+  flex: 0 0 auto;
+  font-size: 0.95rem;
+}
+
+.chat__message-search-summary {
+  margin-left: auto;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  min-height: 1em;
+}
+
 .icon-button {
   width: 36px;
   height: 36px;
@@ -410,6 +465,27 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
+}
+
+.message--search-hidden {
+  display: none !important;
+}
+
+.message--search-match .message__bubble {
+  outline: 2px solid rgba(37, 211, 102, 0.6);
+  outline-offset: 2px;
+}
+
+.message--outgoing.message--search-match .message__bubble {
+  outline-color: rgba(255, 255, 255, 0.7);
+}
+
+:root[data-theme="light"] .message--search-match .message__bubble {
+  outline-color: rgba(0, 128, 105, 0.55);
+}
+
+:root[data-theme="light"] .message--outgoing.message--search-match .message__bubble {
+  outline-color: rgba(0, 128, 105, 0.75);
 }
 
 .message__time {
@@ -533,7 +609,20 @@ body {
   }
 
   .chat__actions {
-    display: none;
+    gap: 0.35rem;
+  }
+
+  .chat__message-search {
+    padding: 0.65rem 1rem;
+    gap: 0.45rem;
+  }
+
+  .chat__message-search input {
+    flex: 1 1 100%;
+  }
+
+  .chat__message-search-summary {
+    margin-left: 0;
   }
 
   .chat__messages {
@@ -561,6 +650,15 @@ body {
 
   .chat__header {
     padding: 0.75rem 1rem;
+  }
+
+  .chat__message-search {
+    padding: 0.6rem 0.75rem;
+  }
+
+  .chat__message-search-summary {
+    width: 100%;
+    font-size: 0.75rem;
   }
 
   .emoji-picker {
