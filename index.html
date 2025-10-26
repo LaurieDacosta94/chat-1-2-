@@ -87,12 +87,18 @@
         <div class="chat__actions">
           <button
             class="icon-button"
-            type="button"
-            id="toggle-message-search"
-            aria-label="Search messages"
-            aria-haspopup="true"
-            aria-expanded="false"
-            aria-controls="message-search-container"
+            id="export-chat"
+            aria-label="Export conversation"
+            title="Export conversation"
+          >
+            ⬇️
+          </button>
+          <button
+            class="icon-button"
+            id="open-message-search"
+            aria-label="Search conversation"
+            aria-pressed="false"
+            title="Search in conversation"
           >
             🔍
           </button>
@@ -104,32 +110,60 @@
           </button>
         </div>
       </header>
-      <div class="chat__message-search" id="message-search-container" hidden>
-        <label class="visually-hidden" for="message-search-input">Search messages</label>
-        <input
-          type="search"
-          id="message-search-input"
-          placeholder="Search messages"
-          aria-label="Search messages"
-          autocomplete="off"
-        />
-        <button
-          class="icon-button chat__message-search-clear"
-          type="button"
-          id="message-search-clear"
-          aria-label="Clear message search"
-        >
-          ✕
-        </button>
-        <div
-          class="chat__message-search-summary"
-          id="message-search-summary"
-          role="status"
-          aria-live="polite"
-        ></div>
+      <div class="chat__message-search" id="message-search" role="search" hidden aria-hidden="true">
+        <div class="chat__message-search-input">
+          <input
+            type="text"
+            id="message-search-input"
+            placeholder="Search this conversation"
+            aria-label="Search messages"
+          />
+          <button
+            class="icon-button"
+            type="button"
+            id="message-search-close"
+            aria-label="Close message search"
+            title="Close message search"
+          >
+            ✕
+          </button>
+        </div>
+        <div class="chat__message-search-controls">
+          <span class="chat__message-search-meta" id="message-search-meta" aria-live="polite"
+            >Type to search conversation</span
+          >
+          <div class="chat__message-search-nav">
+            <button
+              class="icon-button"
+              type="button"
+              id="message-search-prev"
+              aria-label="Previous match"
+              title="Previous match"
+              disabled
+            >
+              ↑
+            </button>
+            <button
+              class="icon-button"
+              type="button"
+              id="message-search-next"
+              aria-label="Next match"
+              title="Next match"
+              disabled
+            >
+              ↓
+            </button>
+          </div>
+        </div>
       </div>
       <section class="chat__messages" id="chat-messages" role="log" aria-live="polite"></section>
       <footer class="chat__composer" id="chat-composer" hidden>
+        <div
+          class="composer-attachments"
+          id="composer-attachments"
+          hidden
+          aria-live="polite"
+        ></div>
         <button
           class="icon-button"
           id="emoji-button"
@@ -141,6 +175,21 @@
           😊
         </button>
         <div class="emoji-picker" id="emoji-picker" role="menu" hidden></div>
+        <button
+          class="icon-button"
+          id="attachment-button"
+          aria-label="Add attachment"
+          title="Add attachment"
+        >
+          📎
+        </button>
+        <input
+          type="file"
+          id="attachment-input"
+          accept="image/*"
+          multiple
+          hidden
+        />
         <textarea id="message-input" placeholder="Type a message" rows="1" aria-label="Message input"></textarea>
         <button class="icon-button icon-button--send" id="send-button" aria-label="Send message">➤</button>
       </footer>
@@ -166,6 +215,7 @@
   <template id="message-template">
     <article class="message">
       <div class="message__bubble">
+        <div class="message__attachments" hidden></div>
         <p class="message__text"></p>
         <span class="message__meta">
           <time class="message__time"></time>
@@ -192,6 +242,61 @@
           <label class="settings__option">
             <input type="radio" name="theme" value="light" />
             <span>Light</span>
+          </label>
+        </fieldset>
+        <fieldset class="settings__section">
+          <legend class="settings__legend">Chat wallpaper</legend>
+          <label class="settings__option settings__option--wallpaper">
+            <input type="radio" name="wallpaper" value="grid" />
+            <span
+              class="settings__option-preview settings__option-preview--grid"
+              aria-hidden="true"
+            ></span>
+            <span class="settings__option-text">
+              <span class="settings__option-title">Classic grid</span>
+              <span class="settings__option-description"
+                >Subtle texture inspired by WhatsApp</span
+              >
+            </span>
+          </label>
+          <label class="settings__option settings__option--wallpaper">
+            <input type="radio" name="wallpaper" value="aurora" />
+            <span
+              class="settings__option-preview settings__option-preview--aurora"
+              aria-hidden="true"
+            ></span>
+            <span class="settings__option-text">
+              <span class="settings__option-title">Aurora</span>
+              <span class="settings__option-description"
+                >Soft gradients with hints of color</span
+              >
+            </span>
+          </label>
+          <label class="settings__option settings__option--wallpaper">
+            <input type="radio" name="wallpaper" value="bloom" />
+            <span
+              class="settings__option-preview settings__option-preview--bloom"
+              aria-hidden="true"
+            ></span>
+            <span class="settings__option-text">
+              <span class="settings__option-title">Bloom</span>
+              <span class="settings__option-description"
+                >Warm, floral-inspired highlights</span
+              >
+            </span>
+          </label>
+          <label class="settings__option settings__option--wallpaper">
+            <input type="radio" name="wallpaper" value="none" />
+            <span
+              class="settings__option-preview settings__option-preview--none"
+              aria-hidden="true"
+            ></span>
+            <span class="settings__option-text">
+              <span class="settings__option-title">Solid color</span>
+              <span class="settings__option-description"
+                >Keep the chat background minimal</span
+              >
+            </span>
           </label>
         </fieldset>
       </form>
