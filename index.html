@@ -85,6 +85,17 @@
           </div>
         </div>
         <div class="chat__actions">
+          <button
+            class="icon-button"
+            type="button"
+            id="toggle-message-search"
+            aria-label="Search messages"
+            aria-haspopup="true"
+            aria-expanded="false"
+            aria-controls="message-search-container"
+          >
+            🔍
+          </button>
           <button class="icon-button" id="toggle-star" aria-label="Star conversation">
             ⭐
           </button>
@@ -93,6 +104,30 @@
           </button>
         </div>
       </header>
+      <div class="chat__message-search" id="message-search-container" hidden>
+        <label class="visually-hidden" for="message-search-input">Search messages</label>
+        <input
+          type="search"
+          id="message-search-input"
+          placeholder="Search messages"
+          aria-label="Search messages"
+          autocomplete="off"
+        />
+        <button
+          class="icon-button chat__message-search-clear"
+          type="button"
+          id="message-search-clear"
+          aria-label="Clear message search"
+        >
+          ✕
+        </button>
+        <div
+          class="chat__message-search-summary"
+          id="message-search-summary"
+          role="status"
+          aria-live="polite"
+        ></div>
+      </div>
       <section class="chat__messages" id="chat-messages" role="log" aria-live="polite"></section>
       <footer class="chat__composer" id="chat-composer" hidden>
         <button
