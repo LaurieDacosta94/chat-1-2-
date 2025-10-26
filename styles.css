@@ -546,11 +546,29 @@ body {
 
 .message__attachment {
   border-radius: 0.75rem;
-  overflow: hidden;
 }
 
 .message__attachment--file {
   background: var(--attachment-surface);
+}
+
+.message__attachment-link {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+  border-radius: inherit;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.message__attachment-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.message__attachment-link:hover .message__attachment-file,
+.message__attachment-link:focus-visible .message__attachment-file {
+  background: var(--attachment-surface-strong);
 }
 
 .message__attachment img {
