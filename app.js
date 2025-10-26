@@ -271,6 +271,62 @@ function deriveAttachmentKind(type = "") {
   return AttachmentKind.FILE;
 }
 
+function deriveFileExtension(type = "") {
+  if (!type || typeof type !== "string") {
+    return "";
+  }
+
+  const [group, subtype] = type.split("/");
+  if (!group || !subtype) {
+    return "";
+  }
+
+  if (subtype.includes("jpeg")) {
+    return ".jpg";
+  }
+  if (subtype.includes("plain")) {
+    return ".txt";
+  }
+
+  const normalizedSubtype = subtype
+    .split(";")[0]
+    .replace(/[^a-z0-9.+-]/gi, "")
+    .trim();
+  if (!normalizedSubtype) {
+    return "";
+  }
+
+  return `.${normalizedSubtype}`;
+}
+
+function sanitizeFileName(name = "", fallback = "attachment") {
+  const trimmed = typeof name === "string" ? name.trim() : "";
+  if (!trimmed) {
+    return fallback;
+  }
+  const sanitized = trimmed.replace(/[\\/:*?"<>|]+/g, "_");
+  return sanitized || fallback;
+}
+
+function getAttachmentDownloadName(attachment) {
+  const normalized =
+    attachment && typeof attachment === "object" && typeof attachment.dataUrl === "string"
+      ? attachment
+      : normalizeAttachment(attachment);
+  if (!normalized) {
+    return "attachment";
+  }
+
+  const baseName = sanitizeFileName(normalized.name ?? "", "attachment");
+  const extension = deriveFileExtension(normalized.type);
+  if (!extension) {
+    return baseName;
+  }
+
+  const hasExtension = baseName.toLowerCase().endsWith(extension.toLowerCase());
+  return hasExtension ? baseName : `${baseName}${extension}`;
+}
+
 function normalizeAttachment(attachment) {
   if (!attachment || typeof attachment !== "object") return null;
 
@@ -1172,6 +1228,14 @@ function createMessageAttachmentElement(attachment) {
   const normalized = normalizeAttachment(attachment);
   if (!normalized) return null;
 
+  const downloadName = getAttachmentDownloadName(normalized);
+  const link = document.createElement("a");
+  link.className = "message__attachment-link";
+  link.href = normalized.dataUrl;
+  link.download = downloadName;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+
   if (normalized.kind === AttachmentKind.IMAGE) {
     const container = document.createElement("div");
     container.className = "message__attachment";
@@ -1182,8 +1246,9 @@ function createMessageAttachmentElement(attachment) {
       ? `${getAttachmentLabel(normalized)}: ${normalized.name}`
       : getAttachmentLabel(normalized);
     image.alt = label;
-    container.appendChild(image);
-    container.setAttribute("aria-label", label);
+    link.setAttribute("aria-label", `${label}. Download`);
+    link.appendChild(image);
+    container.appendChild(link);
     return container;
   }
 
@@ -1219,7 +1284,8 @@ function createMessageAttachmentElement(attachment) {
   }
 
   wrapper.append(icon, details);
-  container.appendChild(wrapper);
+  link.appendChild(wrapper);
+  container.appendChild(link);
   const accessibleLabel = [
     getAttachmentLabel(normalized),
     normalized.name ? normalized.name : null,
@@ -1227,9 +1293,8 @@ function createMessageAttachmentElement(attachment) {
   ]
     .filter(Boolean)
     .join(" ");
-  if (accessibleLabel) {
-    container.setAttribute("aria-label", accessibleLabel);
-  }
+  const label = accessibleLabel ? `${accessibleLabel}. Download` : "Download attachment";
+  link.setAttribute("aria-label", label);
   return container;
 }
 
