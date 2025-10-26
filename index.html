@@ -16,7 +16,7 @@
         <div class="sidebar__title">Chats</div>
         <div class="sidebar__actions">
           <button
-            class="sidebar__settings"
+            class="icon-button sidebar__settings"
             id="settings-button"
             title="Open settings"
             aria-label="Open settings"
@@ -102,59 +102,6 @@
     </main>
   </div>
 
-  <div class="modal" id="settings-modal" hidden>
-    <div class="modal__overlay" data-close-modal></div>
-    <div class="modal__panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-      <header class="modal__header">
-        <h2 id="settings-title">Settings</h2>
-        <button class="icon-button modal__close" id="close-settings-button" aria-label="Close settings">✕</button>
-      </header>
-      <div class="modal__content">
-        <section class="settings-group" aria-labelledby="theme-heading">
-          <h3 id="theme-heading">Theme</h3>
-          <label class="settings-option" for="theme-system">
-            <input type="radio" name="theme" id="theme-system" value="system" />
-            System default
-          </label>
-          <label class="settings-option" for="theme-light">
-            <input type="radio" name="theme" id="theme-light" value="light" />
-            Light
-          </label>
-          <label class="settings-option" for="theme-dark">
-            <input type="radio" name="theme" id="theme-dark" value="dark" />
-            Dark
-          </label>
-        </section>
-
-        <section class="settings-group" aria-labelledby="density-heading">
-          <h3 id="density-heading">Density</h3>
-          <label class="settings-option" for="density-comfortable">
-            <input
-              type="radio"
-              name="density"
-              id="density-comfortable"
-              value="comfortable"
-            />
-            Comfortable
-          </label>
-          <label class="settings-option" for="density-compact">
-            <input type="radio" name="density" id="density-compact" value="compact" />
-            Compact
-          </label>
-        </section>
-
-        <section class="settings-group" aria-labelledby="motion-heading">
-          <h3 id="motion-heading">Accessibility</h3>
-          <label class="settings-option settings-option--checkbox" for="reduce-motion-toggle">
-            <input type="checkbox" id="reduce-motion-toggle" />
-            Reduce motion
-          </label>
-          <p class="settings-helper">Turns off most transitions and animations.</p>
-        </section>
-      </div>
-    </div>
-  </div>
-
   <template id="chat-item-template">
     <button class="chat-item" data-chat-id="">
       <div class="chat-item__avatar" aria-hidden="true"></div>
@@ -175,10 +122,36 @@
     <article class="message">
       <div class="message__bubble">
         <p class="message__text"></p>
-        <span class="message__meta"></span>
+        <span class="message__meta">
+          <time class="message__time"></time>
+          <span class="message__status" aria-hidden="true"></span>
+        </span>
       </div>
     </article>
   </template>
+
+  <div class="modal" id="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" hidden>
+    <div class="modal__backdrop" data-close-modal></div>
+    <div class="modal__content" role="document">
+      <header class="modal__header">
+        <h2 class="modal__title" id="settings-title">Settings</h2>
+        <button class="icon-button modal__close" id="settings-close" aria-label="Close settings">✕</button>
+      </header>
+      <form class="settings" id="settings-form">
+        <fieldset class="settings__section">
+          <legend class="settings__legend">Theme</legend>
+          <label class="settings__option">
+            <input type="radio" name="theme" value="dark" />
+            <span>Dark</span>
+          </label>
+          <label class="settings__option">
+            <input type="radio" name="theme" value="light" />
+            <span>Light</span>
+          </label>
+        </fieldset>
+      </form>
+    </div>
+  </div>
 
   <script src="app.js" type="module"></script>
 </body>
