@@ -6,9 +6,12 @@ A lightweight, responsive WhatsApp-style messaging interface built with vanilla 
 
 - 📱 **Responsive layout** that adapts from desktop to mobile sizes.
 - 💬 **Dynamic chat list** with search, starring, and archiving capabilities.
+- 🗂️ **Sidebar filters** to flip between all, starred, and archived chats with live counts.
 - 🧠 **In-memory + localStorage persistence** so conversations survive page reloads (per browser).
+- 🎛️ **Personalizable settings** for theme (system/light/dark), layout density, and reduced motion preferences saved per device.
 - ✍️ **Message composer** supporting multiline input and keyboard shortcuts (`Enter` to send, `Ctrl/Cmd + K` to focus search).
 - 🔔 **Toast notifications** for key actions.
+- ⏱️ **Friendly timestamps & previews** that keep recent conversations surfaced.
 
 ## Getting Started
 

@@ -14,12 +14,59 @@
     <aside class="sidebar">
       <header class="sidebar__header">
         <div class="sidebar__title">Chats</div>
-        <button class="sidebar__new-chat" id="new-chat-button" title="Start new chat" aria-label="Start new chat">
-          +
-        </button>
+        <div class="sidebar__actions">
+          <button
+            class="sidebar__settings"
+            id="settings-button"
+            title="Open settings"
+            aria-label="Open settings"
+          >
+            ⚙️
+          </button>
+          <button
+            class="sidebar__new-chat"
+            id="new-chat-button"
+            title="Start new chat"
+            aria-label="Start new chat"
+          >
+            +
+          </button>
+        </div>
       </header>
       <div class="sidebar__search">
         <input type="text" id="chat-search" placeholder="Search or start new chat" aria-label="Search chats" />
+      </div>
+      <div class="sidebar__filters" role="tablist" aria-label="Chat filters">
+        <button
+          class="filter-chip filter-chip--active"
+          data-filter="all"
+          role="tab"
+          aria-selected="true"
+          aria-controls="chat-list"
+        >
+          All
+          <span class="filter-chip__count" data-filter-count="all" aria-hidden="true">0</span>
+        </button>
+        <button
+          class="filter-chip"
+          data-filter="starred"
+          role="tab"
+          aria-selected="false"
+          aria-controls="chat-list"
+        >
+          Starred
+          <span class="filter-chip__count" data-filter-count="starred" aria-hidden="true">0</span>
+        </button>
+        <button
+          class="filter-chip"
+          data-filter="archived"
+          role="tab"
+          aria-selected="false"
+          aria-controls="chat-list"
+        >
+          Archived
+          <span class="filter-chip__count" data-filter-count="archived" aria-hidden="true">0</span>
+        </button>
       </div>
       <nav class="chat-list" id="chat-list" aria-label="Chat list"></nav>
     </aside>
@@ -53,6 +100,59 @@
         <button class="icon-button icon-button--send" id="send-button" aria-label="Send message">➤</button>
       </footer>
     </main>
+  </div>
+
+  <div class="modal" id="settings-modal" hidden>
+    <div class="modal__overlay" data-close-modal></div>
+    <div class="modal__panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <header class="modal__header">
+        <h2 id="settings-title">Settings</h2>
+        <button class="icon-button modal__close" id="close-settings-button" aria-label="Close settings">✕</button>
+      </header>
+      <div class="modal__content">
+        <section class="settings-group" aria-labelledby="theme-heading">
+          <h3 id="theme-heading">Theme</h3>
+          <label class="settings-option" for="theme-system">
+            <input type="radio" name="theme" id="theme-system" value="system" />
+            System default
+          </label>
+          <label class="settings-option" for="theme-light">
+            <input type="radio" name="theme" id="theme-light" value="light" />
+            Light
+          </label>
+          <label class="settings-option" for="theme-dark">
+            <input type="radio" name="theme" id="theme-dark" value="dark" />
+            Dark
+          </label>
+        </section>
+
+        <section class="settings-group" aria-labelledby="density-heading">
+          <h3 id="density-heading">Density</h3>
+          <label class="settings-option" for="density-comfortable">
+            <input
+              type="radio"
+              name="density"
+              id="density-comfortable"
+              value="comfortable"
+            />
+            Comfortable
+          </label>
+          <label class="settings-option" for="density-compact">
+            <input type="radio" name="density" id="density-compact" value="compact" />
+            Compact
+          </label>
+        </section>
+
+        <section class="settings-group" aria-labelledby="motion-heading">
+          <h3 id="motion-heading">Accessibility</h3>
+          <label class="settings-option settings-option--checkbox" for="reduce-motion-toggle">
+            <input type="checkbox" id="reduce-motion-toggle" />
+            Reduce motion
+          </label>
+          <p class="settings-helper">Turns off most transitions and animations.</p>
+        </section>
+      </div>
+    </div>
   </div>
 
   <template id="chat-item-template">
