@@ -1630,10 +1630,36 @@ function addMessageToChat(chatId, text, direction = "outgoing", attachments = []
   return { wasArchived };
 }
 
-function createChat(name) {
-  const id = name.toLowerCase().replace(/[^a-z0-9]+/g, "-") || crypto.randomUUID();
+function createChat(nameInput) {
+  const rawName = typeof nameInput === "string" ? nameInput.trim() : "";
+  const normalizedName =
+    rawName && typeof rawName.normalize === "function" ? rawName.normalize("NFKD") : rawName;
+  const sanitizedIdBase = normalizedName
+    ? normalizedName
+        .replace(/\p{M}+/gu, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/(^-|-$)/g, "")
+    : "";
+  const existingIds = new Set(chats.map((chat) => chat.id));
+  let candidateId = sanitizedIdBase || "";
+  if (!candidateId) {
+    candidateId = crypto.randomUUID();
+  } else {
+    let suffix = 2;
+    while (existingIds.has(candidateId)) {
+      candidateId = `${sanitizedIdBase}-${suffix}`;
+      suffix += 1;
+      if (suffix > existingIds.size + 5) {
+        candidateId = crypto.randomUUID();
+        break;
+      }
+    }
+  }
+
+  const name = rawName || "New chat";
   const newChat = {
-    id,
+    id: candidateId,
     name,
     status: "online",
     avatar: name
@@ -1807,9 +1833,11 @@ async function handleAttachmentSelection(event) {
 
 function handleNewChat() {
   const name = prompt("Who would you like to message?");
-  if (!name) return;
-  createChat(name);
-  showToast(`Started a chat with ${name}`);
+  if (typeof name !== "string") return;
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  createChat(trimmed);
+  showToast(`Started a chat with ${trimmed}`);
 }
 
 function handleSearch(event) {
