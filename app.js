@@ -15,6 +15,11 @@ const chatSearchInput = document.getElementById("chat-search");
 const newChatButton = document.getElementById("new-chat-button");
 const toggleStarButton = document.getElementById("toggle-star");
 const toggleArchiveButton = document.getElementById("toggle-archive");
+const messageSearchToggleButton = document.getElementById("toggle-message-search");
+const messageSearchContainer = document.getElementById("message-search-container");
+const messageSearchInput = document.getElementById("message-search-input");
+const messageSearchClearButton = document.getElementById("message-search-clear");
+const messageSearchSummary = document.getElementById("message-search-summary");
 const filterChips = Array.from(document.querySelectorAll(".filter-chip"));
 const filterCountElements = {
   all: document.querySelector('[data-filter-count="all"]'),
@@ -601,6 +606,9 @@ let activeTheme = loadTheme();
 let activeChatId = null;
 let activeFilter = Filter.ALL;
 let settingsRestoreFocusTo = null;
+let isMessageSearchOpen = false;
+let messageSearchTermRaw = "";
+let messageSearchTerm = "";
 
 function getActiveChat() {
   return chats.find((chat) => chat.id === activeChatId) ?? null;
@@ -721,6 +729,7 @@ function renderChatView(chat) {
     chatMessagesElement.innerHTML = "";
     messageInput.value = "";
     autoResizeTextarea();
+    syncMessageSearchUI();
     return;
   }
 
@@ -748,6 +757,9 @@ function renderChatView(chat) {
     messageNode.classList.add(
       message.direction === "outgoing" ? "message--outgoing" : "message--incoming"
     );
+    messageNode.dataset.messageId = message.id;
+    messageNode.dataset.searchContent =
+      typeof message.text === "string" ? message.text.toLowerCase() : "";
 
     const textNode = messageNode.querySelector(".message__text");
     const metaNode = messageNode.querySelector(".message__meta");
@@ -802,6 +814,156 @@ function renderChatView(chat) {
   const draftValue = getDraft(chat.id) ?? "";
   messageInput.value = draftValue;
   autoResizeTextarea();
+  syncMessageSearchUI({ scrollToFirstMatch: true });
+}
+
+function resetMessageSearchStyles() {
+  if (!chatMessagesElement) return;
+  const messageNodes = chatMessagesElement.querySelectorAll(".message");
+  messageNodes.forEach((node) => {
+    node.classList.remove("message--search-hidden", "message--search-match");
+  });
+}
+
+function applyMessageSearchFilter({ scrollToFirstMatch = false } = {}) {
+  if (!chatMessagesElement) return 0;
+  if (!messageSearchTerm) return 0;
+
+  const messageNodes = Array.from(chatMessagesElement.querySelectorAll(".message"));
+  let firstMatch = null;
+  let matchCount = 0;
+
+  messageNodes.forEach((node) => {
+    const content = node.dataset.searchContent ?? "";
+    const matches = content.includes(messageSearchTerm);
+    if (!matches) {
+      node.classList.add("message--search-hidden");
+      return;
+    }
+    node.classList.add("message--search-match");
+    matchCount += 1;
+    if (!firstMatch) {
+      firstMatch = node;
+    }
+  });
+
+  if (scrollToFirstMatch && firstMatch) {
+    firstMatch.scrollIntoView({ block: "center" });
+  }
+
+  return matchCount;
+}
+
+function updateMessageSearchSummary(matchCount) {
+  if (!messageSearchSummary) return;
+  const hasTerm = Boolean(messageSearchTerm);
+  if (!isMessageSearchOpen || !hasTerm) {
+    messageSearchSummary.textContent = "";
+    return;
+  }
+  if (!matchCount) {
+    messageSearchSummary.textContent = "No matches";
+    return;
+  }
+  messageSearchSummary.textContent = `${matchCount} match${matchCount === 1 ? "" : "es"}`;
+}
+
+function syncMessageSearchUI({ scrollToFirstMatch = false } = {}) {
+  resetMessageSearchStyles();
+
+  const chat = getActiveChat();
+  if (!chat || !isMessageSearchOpen) {
+    if (messageSearchContainer) {
+      messageSearchContainer.hidden = true;
+    }
+    if (messageSearchToggleButton) {
+      messageSearchToggleButton.setAttribute("aria-expanded", "false");
+    }
+    if (messageSearchClearButton) {
+      messageSearchClearButton.hidden = true;
+    }
+    updateMessageSearchSummary(0);
+    return 0;
+  }
+
+  if (messageSearchContainer) {
+    messageSearchContainer.hidden = false;
+  }
+  if (messageSearchToggleButton) {
+    messageSearchToggleButton.setAttribute("aria-expanded", "true");
+  }
+  if (messageSearchInput && messageSearchInput.value !== messageSearchTermRaw) {
+    messageSearchInput.value = messageSearchTermRaw;
+  }
+  if (messageSearchClearButton) {
+    messageSearchClearButton.hidden = !messageSearchTerm;
+  }
+
+  const matches = messageSearchTerm
+    ? applyMessageSearchFilter({ scrollToFirstMatch })
+    : 0;
+  updateMessageSearchSummary(matches);
+  return matches;
+}
+
+function setMessageSearchTerm(value, { scrollToFirstMatch = false } = {}) {
+  messageSearchTermRaw = value ?? "";
+  messageSearchTerm = messageSearchTermRaw.trim().toLowerCase();
+  if (messageSearchInput && messageSearchInput.value !== messageSearchTermRaw) {
+    messageSearchInput.value = messageSearchTermRaw;
+  }
+  syncMessageSearchUI({ scrollToFirstMatch });
+}
+
+function openMessageSearch({ focus = true, select = false } = {}) {
+  if (isMessageSearchOpen) {
+    if (focus && messageSearchInput) {
+      messageSearchInput.focus();
+      if (select) {
+        messageSearchInput.select();
+      }
+    }
+    return;
+  }
+  if (!getActiveChat()) {
+    showToast("Select a chat to search messages");
+    return;
+  }
+  isMessageSearchOpen = true;
+  syncMessageSearchUI({ scrollToFirstMatch: true });
+  if (focus && messageSearchInput) {
+    messageSearchInput.focus();
+    if (select) {
+      messageSearchInput.select();
+    }
+  }
+}
+
+function closeMessageSearch({ restoreFocus = false } = {}) {
+  if (!isMessageSearchOpen) return;
+  isMessageSearchOpen = false;
+  messageSearchTermRaw = "";
+  messageSearchTerm = "";
+  syncMessageSearchUI();
+  if (restoreFocus && messageSearchToggleButton instanceof HTMLElement) {
+    messageSearchToggleButton.focus();
+  }
+}
+
+function toggleMessageSearch() {
+  if (isMessageSearchOpen) {
+    closeMessageSearch({ restoreFocus: true });
+  } else {
+    openMessageSearch({ focus: true, select: true });
+  }
+}
+
+function clearMessageSearch() {
+  if (!isMessageSearchOpen) return;
+  setMessageSearchTerm("", { scrollToFirstMatch: false });
+  if (messageSearchInput) {
+    messageSearchInput.focus();
+  }
 }
 
 function openChat(chatId) {
@@ -1104,9 +1266,17 @@ function setupKeyboardShortcuts() {
       }
     }
 
-    if (event.ctrlKey && event.key.toLowerCase() === "k") {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
       event.preventDefault();
       chatSearchInput.focus();
+    }
+
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+      const activeChat = getActiveChat();
+      if (!activeChat) return;
+      if (document.activeElement === messageSearchInput) return;
+      event.preventDefault();
+      openMessageSearch({ focus: true, select: true });
     }
   });
 }
@@ -1188,6 +1358,20 @@ function hydrate() {
   messageInput.addEventListener("focus", () => closeEmojiPicker());
   toggleStarButton.addEventListener("click", toggleStar);
   toggleArchiveButton.addEventListener("click", toggleArchive);
+  if (messageSearchToggleButton) {
+    messageSearchToggleButton.addEventListener("click", toggleMessageSearch);
+  }
+  if (messageSearchInput) {
+    messageSearchInput.addEventListener("input", (event) => {
+      const target = event.target;
+      if (target instanceof HTMLInputElement) {
+        setMessageSearchTerm(target.value, { scrollToFirstMatch: true });
+      }
+    });
+  }
+  if (messageSearchClearButton) {
+    messageSearchClearButton.addEventListener("click", clearMessageSearch);
+  }
   filterChips.forEach((chip) => {
     chip.addEventListener("click", () => {
       setActiveFilter(chip.dataset.filter);
@@ -1251,6 +1435,12 @@ function hydrate() {
     if (isEmojiPickerOpen) {
       event.preventDefault();
       closeEmojiPicker({ restoreFocus: true });
+      return;
+    }
+
+    if (isMessageSearchOpen) {
+      event.preventDefault();
+      closeMessageSearch({ restoreFocus: true });
       return;
     }
 
