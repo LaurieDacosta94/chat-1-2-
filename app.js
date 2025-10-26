@@ -9,6 +9,8 @@ const chatStatusElement = document.getElementById("chat-status");
 const chatAvatarElement = document.getElementById("chat-avatar");
 const messageInput = document.getElementById("message-input");
 const sendButton = document.getElementById("send-button");
+const emojiButton = document.getElementById("emoji-button");
+const emojiPicker = document.getElementById("emoji-picker");
 const chatSearchInput = document.getElementById("chat-search");
 const newChatButton = document.getElementById("new-chat-button");
 const toggleStarButton = document.getElementById("toggle-star");
@@ -155,6 +157,59 @@ const Filter = {
 };
 
 const messageStatusTimers = new Map();
+const EMOJI_CHARACTERS = [
+  "😀",
+  "😁",
+  "😂",
+  "🤣",
+  "😊",
+  "😇",
+  "🙂",
+  "🙃",
+  "😉",
+  "😍",
+  "😘",
+  "😎",
+  "🤩",
+  "🤔",
+  "🤨",
+  "😐",
+  "😴",
+  "🤤",
+  "😪",
+  "😷",
+  "🤒",
+  "🤕",
+  "🤢",
+  "🤮",
+  "🤧",
+  "😵",
+  "🤯",
+  "🥳",
+  "😡",
+  "😱",
+  "😭",
+  "🥺",
+  "🤗",
+  "🤝",
+  "👍",
+  "👎",
+  "🙏",
+  "👏",
+  "🔥",
+  "🌟",
+  "🎉",
+  "❤️",
+  "💡",
+  "✅",
+  "❌",
+  "💬",
+  "📎",
+  "⏰",
+  "☕",
+  "🍕",
+  "🏖️",
+];
 
 function deriveISOFromLegacyTimestamp(timestamp) {
   if (!timestamp || typeof timestamp !== "string") {
@@ -659,6 +714,7 @@ function renderChats(searchText = "") {
 
 function renderChatView(chat) {
   if (!chat) {
+    closeEmojiPicker();
     chatPlaceholderElement.hidden = false;
     chatHeaderElement.hidden = true;
     chatComposerElement.hidden = true;
@@ -671,6 +727,7 @@ function renderChatView(chat) {
   chatPlaceholderElement.hidden = true;
   chatHeaderElement.hidden = false;
   chatComposerElement.hidden = false;
+  closeEmojiPicker();
 
   chatNameElement.textContent = chat.name;
   chatStatusElement.textContent = chat.status;
@@ -892,6 +949,8 @@ function autoResizeTextarea() {
 }
 
 let toastTimeout = null;
+let isEmojiPickerOpen = false;
+let emojiOutsideClickHandler = null;
 function showToast(message) {
   let toast = document.querySelector(".toast");
   if (!toast) {
@@ -906,6 +965,95 @@ function showToast(message) {
   toastTimeout = setTimeout(() => {
     toast.classList.remove("toast--visible");
   }, 2000);
+}
+
+function buildEmojiPicker() {
+  if (!emojiPicker) return;
+  emojiPicker.innerHTML = "";
+
+  EMOJI_CHARACTERS.forEach((emoji) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "emoji-picker__emoji";
+    button.textContent = emoji;
+    button.dataset.emoji = emoji;
+    button.setAttribute("aria-label", `Insert ${emoji} emoji`);
+    button.setAttribute("role", "menuitem");
+    button.addEventListener("click", () => {
+      insertEmoji(emoji);
+      closeEmojiPicker();
+    });
+    emojiPicker.appendChild(button);
+  });
+}
+
+function insertEmoji(emoji) {
+  if (!messageInput) return;
+  const chat = getActiveChat();
+  if (!chat) return;
+
+  const selectionStart = messageInput.selectionStart ?? messageInput.value.length;
+  const selectionEnd = messageInput.selectionEnd ?? messageInput.value.length;
+  const before = messageInput.value.slice(0, selectionStart);
+  const after = messageInput.value.slice(selectionEnd);
+  const nextValue = `${before}${emoji}${after}`;
+
+  messageInput.value = nextValue;
+  const caretPosition = selectionStart + emoji.length;
+  messageInput.focus();
+  messageInput.setSelectionRange(caretPosition, caretPosition);
+  autoResizeTextarea();
+  setDraft(chat.id, nextValue);
+  renderChats(chatSearchInput.value);
+}
+
+function handleEmojiOutsideClick(event) {
+  if (!emojiPicker || !isEmojiPickerOpen) return;
+  const target = event.target;
+  if (!(target instanceof Node)) return;
+  if (emojiPicker.contains(target)) return;
+  if (emojiButton && emojiButton.contains(target)) return;
+  closeEmojiPicker();
+}
+
+function openEmojiPicker() {
+  if (!emojiPicker || isEmojiPickerOpen) return;
+  if (!emojiPicker.childElementCount) {
+    buildEmojiPicker();
+  }
+  emojiPicker.hidden = false;
+  emojiPicker.classList.add("emoji-picker--visible");
+  isEmojiPickerOpen = true;
+  if (emojiButton) {
+    emojiButton.setAttribute("aria-expanded", "true");
+  }
+  emojiOutsideClickHandler = handleEmojiOutsideClick;
+  document.addEventListener("pointerdown", emojiOutsideClickHandler);
+}
+
+function closeEmojiPicker({ restoreFocus = false } = {}) {
+  if (!emojiPicker || !isEmojiPickerOpen) return;
+  emojiPicker.hidden = true;
+  emojiPicker.classList.remove("emoji-picker--visible");
+  isEmojiPickerOpen = false;
+  if (emojiButton) {
+    emojiButton.setAttribute("aria-expanded", "false");
+  }
+  if (emojiOutsideClickHandler) {
+    document.removeEventListener("pointerdown", emojiOutsideClickHandler);
+    emojiOutsideClickHandler = null;
+  }
+  if (restoreFocus && emojiButton instanceof HTMLElement) {
+    emojiButton.focus();
+  }
+}
+
+function toggleEmojiPicker() {
+  if (isEmojiPickerOpen) {
+    closeEmojiPicker({ restoreFocus: true });
+  } else {
+    openEmojiPicker();
+  }
 }
 
 function showSidebar() {
@@ -1031,11 +1179,13 @@ function hydrate() {
   pruneDrafts();
   renderChatView(null);
   resumePendingStatuses();
+  buildEmojiPicker();
 
   chatSearchInput.addEventListener("input", handleSearch);
   newChatButton.addEventListener("click", handleNewChat);
   sendButton.addEventListener("click", handleSend);
   messageInput.addEventListener("input", handleMessageInput);
+  messageInput.addEventListener("focus", () => closeEmojiPicker());
   toggleStarButton.addEventListener("click", toggleStar);
   toggleArchiveButton.addEventListener("click", toggleArchive);
   filterChips.forEach((chip) => {
@@ -1068,6 +1218,16 @@ function hydrate() {
     });
   });
 
+  if (emojiButton) {
+    emojiButton.addEventListener("click", () => {
+      if (!getActiveChat()) {
+        showToast("Select a chat to start sending emojis");
+        return;
+      }
+      toggleEmojiPicker();
+    });
+  }
+
   setupKeyboardShortcuts();
   setupMobileHeader();
 
@@ -1086,7 +1246,15 @@ function hydrate() {
   });
 
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && settingsModal && !settingsModal.hidden) {
+    if (event.key !== "Escape") return;
+
+    if (isEmojiPickerOpen) {
+      event.preventDefault();
+      closeEmojiPicker({ restoreFocus: true });
+      return;
+    }
+
+    if (settingsModal && !settingsModal.hidden) {
       closeSettings();
     }
   });
