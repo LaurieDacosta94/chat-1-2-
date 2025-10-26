@@ -56,6 +56,27 @@ const profileModalAvatarElement = document.getElementById("profile-modal-avatar"
 const profileSummaryNameElement = document.getElementById("profile-summary-name");
 const profileSummaryAboutElement = document.getElementById("profile-summary-about");
 const profileCancelButton = document.getElementById("profile-cancel");
+const newContactModal = document.getElementById("new-contact-modal");
+const newContactForm = document.getElementById("new-contact-form");
+const newContactCloseButton = document.getElementById("new-contact-close");
+const newContactCancelButton = document.getElementById("new-contact-cancel");
+const newContactPreviewElement = document.getElementById("new-contact-preview");
+const newContactMethodInputs = newContactForm
+  ? Array.from(newContactForm.querySelectorAll('input[name="contact-method"]'))
+  : [];
+const newContactFieldGroups = newContactForm
+  ? Array.from(newContactForm.querySelectorAll("[data-contact-fields]"))
+  : [];
+const newContactNicknameInput = document.getElementById("new-contact-nickname");
+const newContactNicknameNotesInput = document.getElementById(
+  "new-contact-nickname-notes"
+);
+const newContactPhoneInput = document.getElementById("new-contact-phone");
+const newContactPhoneNameInput = document.getElementById("new-contact-phone-name");
+const newContactEmailInput = document.getElementById("new-contact-email");
+const newContactEmailNameInput = document.getElementById("new-contact-email-name");
+const newContactCardNameInput = document.getElementById("new-contact-card-name");
+const newContactCardDetailsInput = document.getElementById("new-contact-card-details");
 
 const chatItemTemplate = document.getElementById("chat-item-template");
 const messageTemplate = document.getElementById("message-template");
@@ -86,6 +107,23 @@ const AttachmentKind = {
   AUDIO: "audio",
   FILE: "file",
 };
+
+const ContactMethod = {
+  NICKNAME: "nickname",
+  PHONE: "phone",
+  EMAIL: "email",
+  CONTACT_CARD: "contact-card",
+};
+
+const ContactMethodLabels = {
+  [ContactMethod.NICKNAME]: "nickname",
+  [ContactMethod.PHONE]: "phone number",
+  [ContactMethod.EMAIL]: "email address",
+  [ContactMethod.CONTACT_CARD]: "contact share",
+};
+
+const CONTACT_STATUS_MAX_LENGTH = 140;
+const NEW_CONTACT_MAX_SOURCE_LENGTH = 2000;
 
 const defaultProfile = {
   name: "Jordan Taylor",
@@ -377,6 +415,314 @@ function cloneAttachment(attachment) {
   return { ...normalized };
 }
 
+function truncateText(text, maxLength = CONTACT_STATUS_MAX_LENGTH) {
+  const value = typeof text === "string" ? text.trim() : "";
+  if (!value) return "";
+  if (!Number.isFinite(maxLength) || maxLength <= 0) {
+    return value;
+  }
+  if (value.length <= maxLength) {
+    return value;
+  }
+  return `${value.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+function sanitizeStatus(value) {
+  return truncateText(value, CONTACT_STATUS_MAX_LENGTH);
+}
+
+function normalizePhoneNumber(value) {
+  if (!value && value !== 0) return "";
+  const text = String(value).trim();
+  if (!text) return "";
+  const digitsOnly = text.replace(/\D/g, "");
+  if (!digitsOnly) return "";
+  const trimmed = text.replace(/\s+/g, "");
+  if (trimmed.startsWith("00") && digitsOnly.length > 2) {
+    return `+${digitsOnly.slice(2)}`;
+  }
+  if (trimmed.startsWith("+")) {
+    return `+${digitsOnly}`;
+  }
+  return digitsOnly;
+}
+
+function formatPhoneNumberForDisplay(value) {
+  const normalized = normalizePhoneNumber(value);
+  if (!normalized) return "";
+  if (normalized.startsWith("+")) {
+    const digits = normalized.slice(1);
+    if (!digits) return normalized;
+    return `+${digits.replace(/(\d{3})(?=\d)/g, "$1 ").trim()}`;
+  }
+  const digits = normalized;
+  if (digits.length === 10) {
+    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+  }
+  if (digits.length === 7) {
+    return `${digits.slice(0, 3)}-${digits.slice(3)}`;
+  }
+  return digits.replace(/(\d{3})(?=\d)/g, "$1 ").trim();
+}
+
+function isValidEmail(value) {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  return /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i.test(trimmed);
+}
+
+function deriveNameFromEmail(email) {
+  if (!isValidEmail(email)) return "";
+  const [local] = email.split("@");
+  if (!local) return "";
+  const cleaned = local.replace(/[._-]+/g, " ").replace(/\d+/g, " ").trim();
+  if (!cleaned) return "";
+  return cleaned
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function parseSharedContactDetails(text) {
+  const raw = typeof text === "string" ? text : "";
+  const trimmed = raw.trim();
+  const result = {
+    source: trimmed ? trimmed.slice(0, NEW_CONTACT_MAX_SOURCE_LENGTH) : "",
+    name: "",
+    nickname: "",
+    email: "",
+    phone: "",
+    phoneDisplay: "",
+    notes: "",
+  };
+
+  if (!trimmed) {
+    return result;
+  }
+
+  const lines = trimmed.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+
+  lines.forEach((line) => {
+    if (!line) return;
+    const colonIndex = line.indexOf(":");
+    let label = "";
+    let value = line;
+    if (colonIndex > -1 && colonIndex < line.length - 1) {
+      label = line.slice(0, colonIndex).trim().toLowerCase();
+      value = line.slice(colonIndex + 1).trim();
+    }
+    if (!value) return;
+
+    if (!result.email) {
+      const emailMatch = value.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+      if (emailMatch) {
+        const email = emailMatch[0].toLowerCase();
+        if (isValidEmail(email)) {
+          result.email = email;
+          return;
+        }
+      }
+    }
+
+    if (!result.phone) {
+      const normalizedPhone = normalizePhoneNumber(value);
+      if (normalizedPhone) {
+        result.phone = normalizedPhone;
+        result.phoneDisplay = formatPhoneNumberForDisplay(normalizedPhone);
+        return;
+      }
+    }
+
+    if (label.includes("name") && !result.name) {
+      result.name = value;
+      return;
+    }
+
+    if (label.includes("nick") && !result.nickname) {
+      result.nickname = value;
+      return;
+    }
+
+    if ((label.includes("note") || label.includes("about")) && value) {
+      result.notes = result.notes ? `${result.notes} ${value}`.trim() : value;
+      return;
+    }
+
+    if (!result.name && /[A-Za-z]/.test(value) && !isValidEmail(value)) {
+      if (!normalizePhoneNumber(value)) {
+        result.name = value;
+        return;
+      }
+    }
+
+    if (!result.notes) {
+      result.notes = value;
+    }
+  });
+
+  if (!result.phoneDisplay && result.phone) {
+    result.phoneDisplay = formatPhoneNumberForDisplay(result.phone);
+  }
+
+  return result;
+}
+
+function normalizeContact(contact) {
+  if (!contact || typeof contact !== "object") return null;
+
+  const methodValue =
+    typeof contact.method === "string" ? contact.method.toLowerCase() : "";
+  const method = Object.values(ContactMethod).includes(methodValue)
+    ? methodValue
+    : ContactMethod.NICKNAME;
+
+  const normalized = { method };
+
+  if (typeof contact.displayName === "string" && contact.displayName.trim()) {
+    normalized.displayName = truncateText(contact.displayName, 80);
+  }
+  if (typeof contact.name === "string" && contact.name.trim()) {
+    normalized.name = truncateText(contact.name, 120);
+  }
+  if (typeof contact.nickname === "string" && contact.nickname.trim()) {
+    normalized.nickname = truncateText(contact.nickname, 120);
+  }
+  if (typeof contact.notes === "string" && contact.notes.trim()) {
+    normalized.notes = truncateText(contact.notes, 200);
+  }
+
+  const phoneCandidate =
+    typeof contact.phone === "string" && contact.phone.trim()
+      ? contact.phone
+      : typeof contact.phoneDisplay === "string" && contact.phoneDisplay.trim()
+      ? contact.phoneDisplay
+      : "";
+  if (phoneCandidate) {
+    const normalizedPhone = normalizePhoneNumber(phoneCandidate);
+    if (normalizedPhone) {
+      normalized.phone = normalizedPhone;
+      normalized.phoneDisplay =
+        typeof contact.phoneDisplay === "string" && contact.phoneDisplay.trim()
+          ? truncateText(contact.phoneDisplay, 60)
+          : formatPhoneNumberForDisplay(normalizedPhone);
+    }
+  }
+
+  if (typeof contact.email === "string" && contact.email.trim()) {
+    const email = contact.email.trim().toLowerCase();
+    if (isValidEmail(email)) {
+      normalized.email = email;
+    }
+  }
+
+  if (typeof contact.source === "string" && contact.source.trim()) {
+    normalized.source = contact.source
+      .trim()
+      .slice(0, NEW_CONTACT_MAX_SOURCE_LENGTH);
+  }
+
+  if (!normalized.displayName) {
+    normalized.displayName =
+      normalized.name ||
+      normalized.nickname ||
+      (normalized.email ? deriveNameFromEmail(normalized.email) : "") ||
+      normalized.phoneDisplay ||
+      normalized.phone ||
+      "";
+  }
+
+  if (normalized.displayName) {
+    normalized.displayName = truncateText(normalized.displayName, 80);
+  }
+
+  if (!normalized.displayName && !normalized.phone && !normalized.email) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function deriveContactStatus(contact) {
+  const normalized = normalizeContact(contact);
+  if (!normalized) return "online";
+
+  switch (normalized.method) {
+    case ContactMethod.NICKNAME: {
+      if (normalized.notes) {
+        return sanitizeStatus(normalized.notes);
+      }
+      return "Added via nickname";
+    }
+    case ContactMethod.PHONE: {
+      if (normalized.phoneDisplay) {
+        return sanitizeStatus(`Phone • ${normalized.phoneDisplay}`);
+      }
+      if (normalized.phone) {
+        return sanitizeStatus(`Phone • ${normalized.phone}`);
+      }
+      break;
+    }
+    case ContactMethod.EMAIL: {
+      if (normalized.email) {
+        return sanitizeStatus(`Email • ${normalized.email}`);
+      }
+      break;
+    }
+    case ContactMethod.CONTACT_CARD: {
+      const parts = [];
+      if (normalized.phoneDisplay) parts.push(normalized.phoneDisplay);
+      if (normalized.email) parts.push(normalized.email);
+      if (normalized.notes) parts.push(normalized.notes);
+      if (!parts.length && normalized.name) parts.push(normalized.name);
+      if (parts.length) {
+        return sanitizeStatus(`Shared contact • ${parts.join(" · ")}`);
+      }
+      return "Shared contact";
+    }
+    default:
+      break;
+  }
+
+  if (normalized.notes) {
+    return sanitizeStatus(normalized.notes);
+  }
+
+  return "Ready to chat";
+}
+
+function getContactPreviewText(contact) {
+  const status = deriveContactStatus(contact);
+  if (!status) return "";
+  if (status.toLowerCase() === "online") return "";
+  return status;
+}
+
+function buildContactTooltip(contact) {
+  const normalized = normalizeContact(contact);
+  if (!normalized) return "";
+
+  const parts = [];
+  const sourceLabel = ContactMethodLabels[normalized.method];
+  if (sourceLabel) {
+    parts.push(`Source: ${sourceLabel}`);
+  }
+  if (normalized.phoneDisplay) {
+    parts.push(`Phone: ${normalized.phoneDisplay}`);
+  } else if (normalized.phone) {
+    parts.push(`Phone: ${normalized.phone}`);
+  }
+  if (normalized.email) {
+    parts.push(`Email: ${normalized.email}`);
+  }
+  if (normalized.notes) {
+    parts.push(`Notes: ${normalized.notes}`);
+  }
+
+  return parts.join(" • ");
+}
+
 function normalizeMessage(message) {
   if (!message) return null;
 
@@ -426,14 +772,25 @@ function normalizeChat(chat) {
       return aTime - bTime;
     });
 
+  const normalizedContact = normalizeContact(chat.contact);
+  const statusCandidate =
+    typeof chat.status === "string" ? chat.status.trim() : "";
+  const sanitizedStatus = sanitizeStatus(statusCandidate);
+  const normalizedName =
+    typeof chat.name === "string" && chat.name.trim()
+      ? chat.name.trim()
+      : normalizedContact?.displayName ?? "New chat";
+
   return {
     ...chat,
-    name: chat.name ?? "New chat",
-    status: chat.status ?? "online",
+    name: normalizedName || "New chat",
+    status: normalizedContact
+      ? sanitizedStatus || deriveContactStatus(normalizedContact)
+      : sanitizedStatus || "online",
     avatar:
       chat.avatar ??
-      (chat.name
-        ? chat.name
+      ((normalizedName || "")
+        ? (normalizedName || "")
             .split(" ")
             .map((part) => part[0])
             .join("")
@@ -443,6 +800,7 @@ function normalizeChat(chat) {
     isStarred: Boolean(chat.isStarred),
     isArchived: Boolean(chat.isArchived),
     messages: normalizedMessages,
+    ...(normalizedContact ? { contact: normalizedContact } : {}),
   };
 }
 
@@ -1095,6 +1453,7 @@ let activeChatId = null;
 let activeFilter = Filter.ALL;
 let settingsRestoreFocusTo = null;
 let profileRestoreFocusTo = null;
+let newContactRestoreFocusTo = null;
 let pendingAttachments = [];
 
 function getActiveChat() {
@@ -1383,6 +1742,13 @@ function renderChats(searchText = "") {
     nameNode.textContent = chat.name;
     avatarNode.textContent = chat.avatar ?? chat.name.slice(0, 1).toUpperCase();
 
+    const tooltip = buildContactTooltip(chat.contact);
+    if (tooltip) {
+      chatNode.setAttribute("title", `${chat.name} • ${tooltip}`);
+    } else {
+      chatNode.removeAttribute("title");
+    }
+
     const lastMessage = chat.messages.at(-1);
     timestampNode.textContent = lastMessage ? formatMessageTimestamp(lastMessage) : "";
 
@@ -1402,6 +1768,10 @@ function renderChats(searchText = "") {
       previewNode.classList.add("chat-item__preview--draft");
     } else if (lastMessage) {
       previewNode.textContent = formatMessagePreview(lastMessage);
+      previewNode.classList.remove("chat-item__preview--draft");
+    } else if (chat.contact) {
+      const contactPreview = getContactPreviewText(chat.contact);
+      previewNode.textContent = contactPreview || "No messages yet";
       previewNode.classList.remove("chat-item__preview--draft");
     } else {
       previewNode.textContent = "No messages yet";
@@ -1697,6 +2067,12 @@ function renderChatView(chat) {
 
   chatNameElement.textContent = chat.name;
   chatStatusElement.textContent = chat.status;
+  const contactTooltip = buildContactTooltip(chat.contact);
+  if (contactTooltip) {
+    chatStatusElement.setAttribute("title", contactTooltip);
+  } else {
+    chatStatusElement.removeAttribute("title");
+  }
   chatAvatarElement.textContent = chat.avatar ?? chat.name.slice(0, 1).toUpperCase();
 
   toggleStarButton.setAttribute(
@@ -1890,10 +2266,18 @@ function addMessageToChat(chatId, text, direction = "outgoing", attachments = []
   return { wasArchived };
 }
 
-function createChat(nameInput) {
+function createChat(nameInput, options = {}) {
+  const { status: statusOverride, contact: contactDetails, avatar: avatarOverride } =
+    options ?? {};
+  const normalizedContact = normalizeContact(contactDetails);
+
   const rawName = typeof nameInput === "string" ? nameInput.trim() : "";
+  const fallbackName = normalizedContact?.displayName ?? "";
+  const baseName = rawName || fallbackName;
   const normalizedName =
-    rawName && typeof rawName.normalize === "function" ? rawName.normalize("NFKD") : rawName;
+    baseName && typeof baseName.normalize === "function"
+      ? baseName.normalize("NFKD")
+      : baseName;
   const sanitizedIdBase = normalizedName
     ? normalizedName
         .replace(/\p{M}+/gu, "")
@@ -1917,21 +2301,35 @@ function createChat(nameInput) {
     }
   }
 
-  const name = rawName || "New chat";
+  const name = baseName || "New chat";
   const newChat = {
     id: candidateId,
     name,
     status: "online",
-    avatar: name
-      .split(" ")
-      .map((part) => part[0])
-      .join("")
-      .slice(0, 2)
-      .toUpperCase(),
+    avatar:
+      typeof avatarOverride === "string" && avatarOverride.trim()
+        ? avatarOverride.trim().slice(0, 2).toUpperCase()
+        : name
+            .split(" ")
+            .map((part) => part[0])
+            .join("")
+            .slice(0, 2)
+            .toUpperCase(),
     isStarred: false,
     isArchived: false,
     messages: [],
   };
+
+  if (normalizedContact) {
+    newChat.contact = normalizedContact;
+  }
+
+  const sanitizedStatus = sanitizeStatus(statusOverride);
+  if (sanitizedStatus) {
+    newChat.status = sanitizedStatus;
+  } else if (normalizedContact) {
+    newChat.status = deriveContactStatus(normalizedContact);
+  }
 
   chats = [newChat, ...chats];
   saveState(chats);
@@ -1941,6 +2339,7 @@ function createChat(nameInput) {
   }
   chatSearchInput.value = "";
   openChat(newChat.id);
+  return newChat;
 }
 
 function handleSend() {
@@ -2091,13 +2490,303 @@ async function handleAttachmentSelection(event) {
   renderChats(chatSearchInput.value);
 }
 
+function getActiveNewContactMethod() {
+  const checked = newContactMethodInputs.find((input) => input.checked);
+  const value = checked?.value ?? ContactMethod.NICKNAME;
+  return Object.values(ContactMethod).includes(value) ? value : ContactMethod.NICKNAME;
+}
+
+function setActiveContactMethod(method, { focus = false } = {}) {
+  if (!newContactForm) return;
+  const targetMethod = Object.values(ContactMethod).includes(method)
+    ? method
+    : ContactMethod.NICKNAME;
+
+  newContactMethodInputs.forEach((input) => {
+    input.checked = input.value === targetMethod;
+  });
+
+  newContactFieldGroups.forEach((group) => {
+    const shouldShow = group.dataset.contactFields === targetMethod;
+    group.hidden = !shouldShow;
+    const controls = Array.from(group.querySelectorAll("input, textarea"));
+    controls.forEach((control) => {
+      if (!(control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement)) {
+        return;
+      }
+      if (shouldShow) {
+        control.removeAttribute("disabled");
+      } else {
+        control.setAttribute("disabled", "true");
+      }
+    });
+  });
+
+  if (focus) {
+    const activeGroup = newContactFieldGroups.find(
+      (group) => group.dataset.contactFields === targetMethod
+    );
+    const focusTarget = activeGroup
+      ? activeGroup.querySelector(
+          "input:not([type=\"radio\"]):not([disabled]), textarea:not([disabled])"
+        )
+      : null;
+    if (focusTarget instanceof HTMLElement) {
+      focusTarget.focus();
+    }
+  }
+
+  updateNewContactPreview();
+}
+
+function resetNewContactForm() {
+  if (!newContactForm) return;
+  newContactForm.reset();
+  setActiveContactMethod(getActiveNewContactMethod());
+}
+
+function collectNewContactData({ strict = false, showErrors = false } = {}) {
+  if (!newContactForm) return null;
+  const method = getActiveNewContactMethod();
+  const contact = { method };
+
+  switch (method) {
+    case ContactMethod.NICKNAME: {
+      const nickname = newContactNicknameInput?.value.trim() ?? "";
+      const notes = newContactNicknameNotesInput?.value.trim() ?? "";
+      if (!nickname && strict) {
+        if (showErrors) {
+          showToast("Enter a nickname");
+          newContactNicknameInput?.focus();
+        }
+        return null;
+      }
+      contact.nickname = nickname;
+      contact.displayName = nickname;
+      contact.notes = notes;
+      break;
+    }
+    case ContactMethod.PHONE: {
+      const rawPhone = newContactPhoneInput?.value ?? "";
+      const normalizedPhone = normalizePhoneNumber(rawPhone);
+      if (!normalizedPhone && strict) {
+        if (showErrors) {
+          showToast("Enter a valid phone number");
+          newContactPhoneInput?.focus();
+        }
+        return null;
+      }
+      if (normalizedPhone) {
+        contact.phone = normalizedPhone;
+        contact.phoneDisplay =
+          formatPhoneNumberForDisplay(normalizedPhone) || formatPhoneNumberForDisplay(rawPhone);
+      }
+      const phoneName = newContactPhoneNameInput?.value.trim() ?? "";
+      contact.displayName =
+        phoneName ||
+        contact.phoneDisplay ||
+        (typeof rawPhone === "string" ? rawPhone.trim() : "");
+      break;
+    }
+    case ContactMethod.EMAIL: {
+      const rawEmail = newContactEmailInput?.value.trim() ?? "";
+      if ((!rawEmail || !isValidEmail(rawEmail)) && strict) {
+        if (showErrors) {
+          showToast("Enter a valid email address");
+          newContactEmailInput?.focus();
+        }
+        return null;
+      }
+      if (rawEmail && isValidEmail(rawEmail)) {
+        contact.email = rawEmail.toLowerCase();
+      }
+      const emailName = newContactEmailNameInput?.value.trim() ?? "";
+      contact.displayName =
+        emailName ||
+        (contact.email ? deriveNameFromEmail(contact.email) : "") ||
+        rawEmail;
+      break;
+    }
+    case ContactMethod.CONTACT_CARD: {
+      const rawDetails = newContactCardDetailsInput?.value ?? "";
+      const manualName = newContactCardNameInput?.value.trim() ?? "";
+      if (!rawDetails.trim() && strict) {
+        if (showErrors) {
+          showToast("Paste contact details to continue");
+          newContactCardDetailsInput?.focus();
+        }
+        return null;
+      }
+      const parsed = parseSharedContactDetails(rawDetails);
+      contact.name = parsed.name;
+      contact.nickname = parsed.nickname;
+      contact.phone = parsed.phone;
+      contact.phoneDisplay = parsed.phoneDisplay;
+      contact.email = parsed.email;
+      contact.notes = parsed.notes;
+      contact.source = parsed.source || rawDetails;
+      contact.displayName =
+        manualName ||
+        parsed.name ||
+        parsed.nickname ||
+        (parsed.email ? deriveNameFromEmail(parsed.email) : "") ||
+        parsed.phoneDisplay ||
+        parsed.phone ||
+        rawDetails.trim().split(/\s+/).slice(0, 3).join(" ");
+      break;
+    }
+    default:
+      return null;
+  }
+
+  if (typeof contact.notes === "string") {
+    contact.notes = contact.notes.trim();
+  }
+
+  const normalized = normalizeContact(contact);
+  if (!normalized) {
+    if (strict && showErrors) {
+      showToast("Add valid contact details");
+    }
+    return null;
+  }
+
+  return normalized;
+}
+
+function getContactMethodLabel(method) {
+  return ContactMethodLabels[method] ?? method;
+}
+
+function updateNewContactPreview() {
+  if (!newContactPreviewElement) return;
+  const contact = collectNewContactData({ strict: false, showErrors: false });
+  if (!contact) {
+    newContactPreviewElement.textContent = "Provide details to preview the chat.";
+    return;
+  }
+
+  const displayName = contact.displayName || "New contact";
+  const status = getContactPreviewText(contact);
+  const methodLabel = getContactMethodLabel(contact.method);
+  const details = [];
+  if (status) details.push(status);
+  if (methodLabel) details.push(`Added from ${methodLabel}`);
+  const description = details.join(" • ") || "Ready to start chatting.";
+
+  newContactPreviewElement.innerHTML = "";
+  const nameNode = document.createElement("strong");
+  nameNode.textContent = displayName;
+  newContactPreviewElement.appendChild(nameNode);
+  const descriptionNode = document.createElement("span");
+  descriptionNode.textContent = description;
+  newContactPreviewElement.appendChild(descriptionNode);
+}
+
+function openNewContactModal() {
+  if (!newContactModal || !newContactForm) return;
+  if (!newContactModal.hidden) return;
+
+  if (profileModal && !profileModal.hidden) {
+    closeProfile({ restoreFocus: false });
+  }
+  if (settingsModal && !settingsModal.hidden) {
+    closeSettings({ restoreFocus: false });
+  }
+
+  newContactRestoreFocusTo =
+    document.activeElement instanceof HTMLElement ? document.activeElement : newChatButton;
+
+  resetNewContactForm();
+  setActiveContactMethod(getActiveNewContactMethod(), { focus: true });
+
+  newContactModal.hidden = false;
+  document.body.classList.add("modal-open");
+}
+
+function closeNewContactModal({ restoreFocus = true } = {}) {
+  if (!newContactModal) return;
+  if (newContactModal.hidden) return;
+
+  newContactModal.hidden = true;
+  if (
+    (!profileModal || profileModal.hidden) &&
+    (!settingsModal || settingsModal.hidden)
+  ) {
+    document.body.classList.remove("modal-open");
+  }
+
+  resetNewContactForm();
+
+  const restoreTarget = newContactRestoreFocusTo;
+  newContactRestoreFocusTo = null;
+
+  if (!restoreFocus) return;
+  if (restoreTarget instanceof HTMLElement) {
+    restoreTarget.focus();
+  } else if (newChatButton) {
+    newChatButton.focus();
+  }
+}
+
+function trapNewContactFocus(event) {
+  if (!newContactModal || newContactModal.hidden) return;
+  if (event.key !== "Tab") return;
+
+  const focusableSelectors =
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  const focusable = Array.from(newContactModal.querySelectorAll(focusableSelectors)).filter(
+    (element) =>
+      element instanceof HTMLElement &&
+      !element.hasAttribute("data-close-modal") &&
+      element.offsetParent !== null
+  );
+
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+
+  if (event.shiftKey) {
+    if (document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    }
+  } else if (document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function handleNewContactSubmit(event) {
+  event.preventDefault();
+  if (!newContactForm) return;
+
+  if (!newContactForm.reportValidity()) {
+    return;
+  }
+
+  const contact = collectNewContactData({ strict: true, showErrors: true });
+  if (!contact) return;
+
+  const status = deriveContactStatus(contact);
+  const chat = createChat(contact.displayName, { status, contact });
+  const methodLabel = getContactMethodLabel(contact.method);
+  showToast(`Started a chat with ${chat.name} via ${methodLabel}`);
+  closeNewContactModal();
+}
+
 function handleNewChat() {
+  if (newContactModal && newContactForm) {
+    openNewContactModal();
+    return;
+  }
+
   const name = prompt("Who would you like to message?");
   if (typeof name !== "string") return;
   const trimmed = name.trim();
   if (!trimmed) return;
-  createChat(trimmed);
-  showToast(`Started a chat with ${trimmed}`);
+  const chat = createChat(trimmed);
+  showToast(`Started a chat with ${chat.name}`);
 }
 
 function handleSearch(event) {
@@ -2117,6 +2806,7 @@ function exportActiveChat() {
     status: chat.status,
     isStarred: chat.isStarred,
     isArchived: chat.isArchived,
+    contact: chat.contact ? { ...chat.contact } : null,
     exportedAt: new Date().toISOString(),
     draft: getDraft(chat.id) ?? "",
     messages: chat.messages.map((message) => ({
@@ -2509,6 +3199,35 @@ function hydrate() {
     });
   });
 
+  if (newContactForm) {
+    newContactForm.addEventListener("submit", handleNewContactSubmit);
+    newContactForm.addEventListener("input", () => updateNewContactPreview());
+  }
+  newContactMethodInputs.forEach((input) => {
+    input.addEventListener("change", (event) => {
+      const target = event.target;
+      if (target instanceof HTMLInputElement) {
+        setActiveContactMethod(target.value, { focus: true });
+      }
+    });
+  });
+  if (newContactCancelButton) {
+    newContactCancelButton.addEventListener("click", () => closeNewContactModal());
+  }
+  if (newContactCloseButton) {
+    newContactCloseButton.addEventListener("click", () => closeNewContactModal());
+  }
+  if (newContactModal) {
+    newContactModal.addEventListener("click", (event) => {
+      const target = event.target;
+      if (target instanceof HTMLElement && target.hasAttribute("data-close-modal")) {
+        closeNewContactModal();
+      }
+    });
+    newContactModal.addEventListener("keydown", trapNewContactFocus);
+  }
+  setActiveContactMethod(getActiveNewContactMethod());
+
   if (profileButton) {
     profileButton.addEventListener("click", openProfile);
   }
@@ -2615,6 +3334,12 @@ function hydrate() {
     if (isEmojiPickerOpen) {
       event.preventDefault();
       closeEmojiPicker({ restoreFocus: true });
+      return;
+    }
+
+    if (newContactModal && !newContactModal.hidden) {
+      event.preventDefault();
+      closeNewContactModal();
       return;
     }
 
