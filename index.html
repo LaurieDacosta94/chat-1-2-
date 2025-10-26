@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WhatsApp Clone</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app" id="app">
+    <aside class="sidebar">
+      <header class="sidebar__header">
+        <div class="sidebar__title">Chats</div>
+        <button class="sidebar__new-chat" id="new-chat-button" title="Start new chat" aria-label="Start new chat">
+          +
+        </button>
+      </header>
+      <div class="sidebar__search">
+        <input type="text" id="chat-search" placeholder="Search or start new chat" aria-label="Search chats" />
+      </div>
+      <nav class="chat-list" id="chat-list" aria-label="Chat list"></nav>
+    </aside>
+
+    <main class="chat" id="chat" aria-live="polite">
+      <div class="chat__placeholder" id="chat-placeholder">
+        <h1>Welcome to WhatsApp Clone</h1>
+        <p>Select a chat or start a new conversation to begin messaging.</p>
+      </div>
+      <header class="chat__header" id="chat-header" hidden>
+        <div class="chat__contact">
+          <div class="chat__avatar" id="chat-avatar" aria-hidden="true"></div>
+          <div>
+            <div class="chat__name" id="chat-name"></div>
+            <div class="chat__status" id="chat-status"></div>
+          </div>
+        </div>
+        <div class="chat__actions">
+          <button class="icon-button" id="toggle-star" aria-label="Star conversation">
+            ⭐
+          </button>
+          <button class="icon-button" id="toggle-archive" aria-label="Archive conversation">
+            📁
+          </button>
+        </div>
+      </header>
+      <section class="chat__messages" id="chat-messages" role="log" aria-live="polite"></section>
+      <footer class="chat__composer" id="chat-composer" hidden>
+        <button class="icon-button" id="emoji-button" aria-label="Insert emoji">😊</button>
+        <textarea id="message-input" placeholder="Type a message" rows="1" aria-label="Message input"></textarea>
+        <button class="icon-button icon-button--send" id="send-button" aria-label="Send message">➤</button>
+      </footer>
+    </main>
+  </div>
+
+  <template id="chat-item-template">
+    <button class="chat-item" data-chat-id="">
+      <div class="chat-item__avatar" aria-hidden="true"></div>
+      <div class="chat-item__details">
+        <div class="chat-item__top">
+          <span class="chat-item__name"></span>
+          <span class="chat-item__timestamp"></span>
+        </div>
+        <div class="chat-item__bottom">
+          <span class="chat-item__preview"></span>
+          <span class="chat-item__meta"></span>
+        </div>
+      </div>
+    </button>
+  </template>
+
+  <template id="message-template">
+    <article class="message">
+      <div class="message__bubble">
+        <p class="message__text"></p>
+        <span class="message__meta"></span>
+      </div>
+    </article>
+  </template>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>
