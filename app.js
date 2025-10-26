@@ -1229,12 +1229,10 @@ function createMessageAttachmentElement(attachment) {
   if (!normalized) return null;
 
   const downloadName = getAttachmentDownloadName(normalized);
-  const link = document.createElement("a");
-  link.className = "message__attachment-link";
-  link.href = normalized.dataUrl;
-  link.download = downloadName;
-  link.target = "_blank";
-  link.rel = "noopener noreferrer";
+  const baseLabel = normalized.name
+    ? `${getAttachmentLabel(normalized)}: ${normalized.name}`
+    : getAttachmentLabel(normalized);
+  const sizeText = formatFileSize(normalized.size);
 
   if (normalized.kind === AttachmentKind.IMAGE) {
     const container = document.createElement("div");
@@ -1242,18 +1240,80 @@ function createMessageAttachmentElement(attachment) {
     const image = document.createElement("img");
     image.className = "message__attachment-image";
     image.src = normalized.dataUrl;
-    const label = normalized.name
-      ? `${getAttachmentLabel(normalized)}: ${normalized.name}`
-      : getAttachmentLabel(normalized);
-    image.alt = label;
-    link.setAttribute("aria-label", `${label}. Download`);
+    image.alt = baseLabel;
+    const link = document.createElement("a");
+    link.className = "message__attachment-link";
+    link.href = normalized.dataUrl;
+    link.download = downloadName;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.setAttribute("aria-label", `${baseLabel}. Download`);
     link.appendChild(image);
     container.appendChild(link);
     return container;
   }
 
+  if (
+    normalized.kind === AttachmentKind.VIDEO ||
+    normalized.kind === AttachmentKind.AUDIO
+  ) {
+    const container = document.createElement("div");
+    container.className = "message__attachment message__attachment--media";
+
+    const media = document.createElement(
+      normalized.kind === AttachmentKind.VIDEO ? "video" : "audio"
+    );
+    media.className =
+      normalized.kind === AttachmentKind.VIDEO
+        ? "message__attachment-video"
+        : "message__attachment-audio";
+    media.src = normalized.dataUrl;
+    media.controls = true;
+    media.preload = "metadata";
+    media.setAttribute("aria-label", baseLabel);
+    container.appendChild(media);
+
+    const footer = document.createElement("div");
+    footer.className = "message__attachment-media-footer";
+
+    const details = document.createElement("div");
+    details.className = "message__attachment-file-details";
+
+    const name = document.createElement("div");
+    name.className = "message__attachment-label";
+    name.textContent = normalized.name ?? getAttachmentLabel(normalized);
+    details.appendChild(name);
+
+    if (sizeText) {
+      const meta = document.createElement("div");
+      meta.className = "message__attachment-meta";
+      meta.textContent = sizeText;
+      details.appendChild(meta);
+    }
+
+    const downloadLink = document.createElement("a");
+    downloadLink.className = "message__attachment-download";
+    downloadLink.href = normalized.dataUrl;
+    downloadLink.download = downloadName;
+    downloadLink.target = "_blank";
+    downloadLink.rel = "noopener noreferrer";
+    downloadLink.textContent = "Download";
+    downloadLink.setAttribute("aria-label", `${baseLabel}. Download`);
+
+    footer.append(details, downloadLink);
+    container.appendChild(footer);
+    return container;
+  }
+
   const container = document.createElement("div");
   container.className = "message__attachment message__attachment--file";
+
+  const link = document.createElement("a");
+  link.className = "message__attachment-link";
+  link.href = normalized.dataUrl;
+  link.download = downloadName;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
 
   const wrapper = document.createElement("div");
   wrapper.className = "message__attachment-file";
@@ -1275,7 +1335,6 @@ function createMessageAttachmentElement(attachment) {
   name.textContent = normalized.name ?? getAttachmentLabel(normalized);
   details.appendChild(name);
 
-  const sizeText = formatFileSize(normalized.size);
   if (sizeText) {
     const meta = document.createElement("div");
     meta.className = "message__attachment-meta";
