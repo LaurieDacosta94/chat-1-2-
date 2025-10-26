@@ -14,6 +14,7 @@ A lightweight, responsive WhatsApp-style messaging interface built with vanilla 
 - ✔️ **Message receipts** that auto-progress from sent → delivered → read.
 - 📝 **Per-chat drafts** so you can pick up where you left off.
 - 🎨 **Light & dark themes** with a quick settings modal.
+- 😀 **Emoji picker** with dozens of reactions ready to drop into any message.
 
 ## Getting Started
 
@@ -29,6 +30,7 @@ No backend or build tooling is required.
 
 - Use the ⚙️ button in the sidebar header to switch between light and dark themes.
 - Drafts are stored per-chat and synced to `localStorage`, so you can bounce between conversations without losing what you were typing.
+- Tap the emoji button next to the composer to open the picker, then click any emoji to insert it at your cursor.
 
 ## Project Structure
 
