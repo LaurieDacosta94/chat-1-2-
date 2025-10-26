@@ -240,6 +240,160 @@
     </article>
   </template>
 
+  <div
+    class="modal"
+    id="new-contact-modal"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="new-contact-title"
+    hidden
+  >
+    <div class="modal__backdrop" data-close-modal></div>
+    <div class="modal__content" role="document">
+      <header class="modal__header">
+        <h2 class="modal__title" id="new-contact-title">Start new chat</h2>
+        <button
+          class="icon-button modal__close"
+          id="new-contact-close"
+          aria-label="Close add contact"
+        >
+          ✕
+        </button>
+      </header>
+      <form class="new-contact" id="new-contact-form" autocomplete="off">
+        <fieldset class="new-contact__methods">
+          <legend class="new-contact__legend">Add contact from</legend>
+          <label class="new-contact__method">
+            <input type="radio" name="contact-method" value="nickname" checked />
+            <span>Nickname</span>
+          </label>
+          <label class="new-contact__method">
+            <input type="radio" name="contact-method" value="phone" />
+            <span>Phone number</span>
+          </label>
+          <label class="new-contact__method">
+            <input type="radio" name="contact-method" value="email" />
+            <span>Email address</span>
+          </label>
+          <label class="new-contact__method">
+            <input type="radio" name="contact-method" value="contact-card" />
+            <span>Contact share</span>
+          </label>
+        </fieldset>
+        <div class="new-contact__fields" data-contact-fields="nickname">
+          <label class="new-contact__field">
+            <span class="new-contact__label">Nickname</span>
+            <input
+              type="text"
+              id="new-contact-nickname"
+              name="nickname"
+              autocomplete="off"
+              required
+            />
+          </label>
+          <label class="new-contact__field">
+            <span class="new-contact__label">Notes (optional)</span>
+            <textarea
+              id="new-contact-nickname-notes"
+              name="nickname-notes"
+              rows="2"
+            ></textarea>
+          </label>
+        </div>
+        <div class="new-contact__fields" data-contact-fields="phone" hidden>
+          <label class="new-contact__field">
+            <span class="new-contact__label">Phone number</span>
+            <input
+              type="tel"
+              id="new-contact-phone"
+              name="phone"
+              inputmode="tel"
+              autocomplete="tel"
+              pattern=".*\\d.*"
+              required
+              disabled
+            />
+            <span class="new-contact__description">Include country code if you have it.</span>
+          </label>
+          <label class="new-contact__field">
+            <span class="new-contact__label">Display name (optional)</span>
+            <input
+              type="text"
+              id="new-contact-phone-name"
+              name="phone-name"
+              autocomplete="name"
+              disabled
+            />
+          </label>
+        </div>
+        <div class="new-contact__fields" data-contact-fields="email" hidden>
+          <label class="new-contact__field">
+            <span class="new-contact__label">Email address</span>
+            <input
+              type="email"
+              id="new-contact-email"
+              name="email"
+              autocomplete="email"
+              required
+              disabled
+            />
+          </label>
+          <label class="new-contact__field">
+            <span class="new-contact__label">Display name (optional)</span>
+            <input
+              type="text"
+              id="new-contact-email-name"
+              name="email-name"
+              autocomplete="name"
+              disabled
+            />
+          </label>
+        </div>
+        <div class="new-contact__fields" data-contact-fields="contact-card" hidden>
+          <label class="new-contact__field">
+            <span class="new-contact__label">Display name (optional)</span>
+            <input
+              type="text"
+              id="new-contact-card-name"
+              name="card-name"
+              autocomplete="name"
+              disabled
+            />
+          </label>
+          <label class="new-contact__field">
+            <span class="new-contact__label">Contact details</span>
+            <textarea
+              id="new-contact-card-details"
+              name="card-details"
+              rows="4"
+              placeholder="Paste a contact card, email signature, or any contact details"
+              required
+              disabled
+            ></textarea>
+            <span class="new-contact__description"
+              >We'll pull out names, phone numbers, and email addresses automatically.</span
+            >
+          </label>
+        </div>
+        <div class="new-contact__preview" id="new-contact-preview" aria-live="polite">
+          Provide details to preview the chat.
+        </div>
+        <div class="new-contact__actions">
+          <button
+            type="button"
+            class="new-contact__button new-contact__button--secondary"
+            id="new-contact-cancel"
+          >
+            Cancel
+          </button>
+          <button type="submit" class="new-contact__button new-contact__button--primary">
+            Start chat
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <div class="modal" id="profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-title" hidden>
     <div class="modal__backdrop" data-close-modal></div>
     <div class="modal__content" role="document">
