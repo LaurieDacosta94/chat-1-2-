@@ -8,13 +8,14 @@ A lightweight, responsive WhatsApp-style messaging interface built with vanilla 
 - 💬 **Dynamic chat list** with search, starring, and archiving capabilities.
 - 🗂️ **Sidebar filters** to flip between all, starred, and archived chats with live counts.
 - 🧠 **In-memory + localStorage persistence** so conversations survive page reloads (per browser).
-- ✍️ **Message composer** supporting multiline input and keyboard shortcuts (`Enter` to send, `Ctrl/Cmd + K` to focus search).
+- ✍️ **Message composer** supporting multiline input and keyboard shortcuts (`Enter` to send, `Ctrl/Cmd + K` to focus chat search).
 - 🔔 **Toast notifications** for key actions.
 - ⏱️ **Friendly timestamps & previews** that keep recent conversations surfaced.
 - ✔️ **Message receipts** that auto-progress from sent → delivered → read.
 - 📝 **Per-chat drafts** so you can pick up where you left off.
 - 🎨 **Light & dark themes** with a quick settings modal.
 - 😀 **Emoji picker** with dozens of reactions ready to drop into any message.
+- 🔍 **In-chat search** that highlights matching messages and hides the rest for quick scanning.
 
 ## Getting Started
 
@@ -31,6 +32,7 @@ No backend or build tooling is required.
 - Use the ⚙️ button in the sidebar header to switch between light and dark themes.
 - Drafts are stored per-chat and synced to `localStorage`, so you can bounce between conversations without losing what you were typing.
 - Tap the emoji button next to the composer to open the picker, then click any emoji to insert it at your cursor.
+- Hit the 🔍 button (or press `Ctrl/Cmd + F`) to search within the active conversation, then clear results with the × control.
 
 ## Project Structure
 
