@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
+const path = require('path');
 const { Server } = require('socket.io');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
@@ -9,6 +10,7 @@ const { Pool } = require('pg');
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'development-secret-change-me';
 const MAX_CHAT_HISTORY = 50;
+const MAX_ACTIVITY_LOG = 250;
 
 const devAdminEnvFlag = process.env.ENABLE_DEV_ADMIN;
 const devAdminEnabled =
@@ -187,6 +189,22 @@ function createInMemoryStore() {
       const startIndex = Math.max(messages.length - normalizedLimit, 0);
       return messages.slice(startIndex).map((message) => ({ ...message }));
     },
+    getAllMessages(limit) {
+      const normalizedLimit =
+        Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 1000) : 200;
+      const allMessages = [];
+      for (const messages of messagesByChatId.values()) {
+        messages.forEach((message) => {
+          const sender = usersById.get(message.sender_id);
+          allMessages.push({
+            ...message,
+            sender_username: sender ? sender.username : null,
+          });
+        });
+      }
+      allMessages.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      return allMessages.slice(0, normalizedLimit).map((message) => ({ ...message }));
+    },
     purgeDatabase({ removeUsers = false } = {}) {
       messagesByChatId.clear();
       if (!removeUsers) {
@@ -320,11 +338,49 @@ const io = new Server(server, {
   },
 });
 
+app.get('/admin', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'admin.html'));
+});
+
+app.get('/admin.js', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'admin.js'));
+});
+
+app.get('/admin.css', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'admin.css'));
+});
+
 // We normalize user identifiers to strings so that sockets looked up via
 // JWT payloads (numbers) and event payloads (often strings) refer to the same
 // entry. Without this, direct message delivery could fail because `Set`
 // lookups treat `1` and `'1'` as different keys.
 const userSocketMap = new Map(); // normalizedUserId -> Set(socketId)
+
+let nextActivityId = 1;
+const activityLog = [];
+
+function recordActivity({ type, summary, details = null }) {
+  const entry = {
+    id: nextActivityId++,
+    type: typeof type === 'string' ? type : 'event',
+    summary: typeof summary === 'string' ? summary : 'Activity recorded.',
+    details: details ?? null,
+    timestamp: new Date().toISOString(),
+  };
+
+  activityLog.unshift(entry);
+  if (activityLog.length > MAX_ACTIVITY_LOG) {
+    activityLog.length = MAX_ACTIVITY_LOG;
+  }
+
+  return entry;
+}
+
+function getActivityLog(limit = 100) {
+  const normalizedLimit =
+    Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), MAX_ACTIVITY_LOG) : 100;
+  return activityLog.slice(0, normalizedLimit).map((entry) => ({ ...entry }));
+}
 
 function normalizeUserId(value) {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -524,6 +580,41 @@ async function saveMessage({ chatId, senderId, content }) {
   }
 }
 
+async function listAllMessages(limit = 200) {
+  const normalizedLimit =
+    Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 1000) : 200;
+
+  if (useInMemoryStore || !pool) {
+    return inMemoryStore.getAllMessages(normalizedLimit);
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT m.id,
+              m.chat_id,
+              m.sender_id,
+              u.username AS sender_username,
+              m.content,
+              m.timestamp
+         FROM messages m
+         LEFT JOIN users u ON m.sender_id = u.id
+         ORDER BY m.timestamp DESC
+         LIMIT $1`,
+      [normalizedLimit]
+    );
+
+    return result.rows.map((row) => ({
+      ...row,
+      timestamp: row.timestamp instanceof Date ? row.timestamp.toISOString() : row.timestamp,
+    }));
+  } catch (error) {
+    if (enableInMemoryFallback(error)) {
+      return inMemoryStore.getAllMessages(normalizedLimit);
+    }
+    throw error;
+  }
+}
+
 async function listUsers() {
   if (useInMemoryStore || !pool) {
     return inMemoryStore.getAllUsers();
@@ -668,28 +759,6 @@ function requireHttpAuth(req, res) {
   return { userId: payload.userId, isAdmin: Boolean(payload.isAdmin) };
 }
 
-async function requireAdminUser(req, res) {
-  const auth = requireHttpAuth(req, res);
-  if (!auth) {
-    return null;
-  }
-
-  try {
-    const user = await findUserById(auth.userId);
-    if (!user || !user.is_admin) {
-      res.status(403).json({ error: 'Admin privileges required.' });
-      return null;
-    }
-
-    const { password_hash: _ignored, ...safeUser } = user;
-    return { auth, user: safeUser };
-  } catch (error) {
-    console.error('Failed to verify admin privileges', error);
-    res.status(500).json({ error: 'Failed to verify admin privileges.' });
-    return null;
-  }
-}
-
 async function fetchRecentMessages(chatId, limit = MAX_CHAT_HISTORY) {
   if (useInMemoryStore || !pool) {
     return inMemoryStore.getRecentMessages(chatId, limit);
@@ -749,6 +818,11 @@ app.post('/api/register', async (req, res) => {
 
     const newUser = await createUser({ username, password });
     const token = generateToken(newUser.id, newUser.is_admin);
+    recordActivity({
+      type: 'user:registered',
+      summary: `User "${newUser.username}" registered.`,
+      details: { userId: newUser.id, username: newUser.username },
+    });
     res.status(201).json({
       token,
       user: {
@@ -782,6 +856,11 @@ app.post('/api/login', async (req, res) => {
     }
 
     const token = generateToken(user.id, user.is_admin);
+    recordActivity({
+      type: 'user:login',
+      summary: `User "${user.username}" logged in.`,
+      details: { userId: user.id, username: user.username },
+    });
     res.json({
       token,
       user: {
@@ -796,12 +875,7 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-app.get('/api/admin/users', async (req, res) => {
-  const admin = await requireAdminUser(req, res);
-  if (!admin) {
-    return;
-  }
-
+app.get('/api/admin/users', async (_req, res) => {
   try {
     const users = await listUsers();
     res.json({
@@ -824,18 +898,9 @@ app.get('/api/admin/users', async (req, res) => {
 });
 
 app.delete('/api/admin/users/:id', async (req, res) => {
-  const admin = await requireAdminUser(req, res);
-  if (!admin) {
-    return;
-  }
-
   const userId = Number.parseInt(req.params.id, 10);
   if (!Number.isInteger(userId) || userId <= 0) {
     return res.status(400).json({ error: 'A valid user id is required.' });
-  }
-
-  if (userId === admin.user.id) {
-    return res.status(400).json({ error: 'You cannot delete your own account.' });
   }
 
   try {
@@ -852,6 +917,12 @@ app.delete('/api/admin/users/:id', async (req, res) => {
       return res.status(409).json({ error: 'Unable to delete user.' });
     }
 
+    recordActivity({
+      type: 'user:deleted',
+      summary: `User "${targetUser.username}" deleted.`,
+      details: { userId: targetUser.id, username: targetUser.username },
+    });
+
     res.json({ success: true });
   } catch (error) {
     console.error('Error deleting user from admin dashboard', error);
@@ -860,15 +931,21 @@ app.delete('/api/admin/users/:id', async (req, res) => {
 });
 
 app.post('/api/admin/purge', async (req, res) => {
-  const admin = await requireAdminUser(req, res);
-  if (!admin) {
-    return;
-  }
-
   const removeUsers = Boolean(req.body?.removeUsers);
 
   try {
     const result = await purgeDatabase({ removeUsers });
+    recordActivity({
+      type: 'system:purge',
+      summary: removeUsers
+        ? 'Messages and non-admin users purged.'
+        : 'All messages purged.',
+      details: {
+        removeUsers,
+        messagesDeleted: result.messagesDeleted,
+        usersDeleted: removeUsers ? result.usersDeleted : 0,
+      },
+    });
     res.json({
       success: true,
       removed: {
@@ -879,6 +956,40 @@ app.post('/api/admin/purge', async (req, res) => {
   } catch (error) {
     console.error('Error purging data from admin dashboard', error);
     res.status(500).json({ error: 'Failed to purge data.' });
+  }
+});
+
+app.get('/api/admin/messages', async (req, res) => {
+  const limitRaw =
+    typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : undefined;
+
+  try {
+    const messages = await listAllMessages(limitRaw);
+    res.json({
+      messages: messages.map((message) => ({
+        id: message.id,
+        chat_id: message.chat_id,
+        sender_id: message.sender_id,
+        sender_username: message.sender_username || null,
+        content: message.content,
+        timestamp: message.timestamp,
+      })),
+    });
+  } catch (error) {
+    console.error('Error listing messages for admin dashboard', error);
+    res.status(500).json({ error: 'Failed to list messages.' });
+  }
+});
+
+app.get('/api/admin/activities', (req, res) => {
+  const limitRaw =
+    typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : undefined;
+  try {
+    const activities = getActivityLog(limitRaw);
+    res.json({ activities });
+  } catch (error) {
+    console.error('Error retrieving activity log', error);
+    res.status(500).json({ error: 'Failed to load activity log.' });
   }
 });
 
@@ -966,6 +1077,32 @@ io.on('connection', (socket) => {
       const message = await saveMessage({ chatId, senderId: authenticatedUserId, content });
       const payload = { ...message, chat_id: chatId };
       io.to(chatId).emit('message', payload);
+
+      let senderUsername = null;
+      try {
+        const sender = await findUserById(authenticatedUserId);
+        senderUsername = sender?.username || null;
+      } catch (_lookupError) {
+        senderUsername = null;
+      }
+
+      const preview =
+        typeof content === 'string'
+          ? content.trim().replace(/\s+/g, ' ').slice(0, 140)
+          : '';
+
+      recordActivity({
+        type: 'message:sent',
+        summary: senderUsername
+          ? `Message from "${senderUsername}" in chat ${chatId}.`
+          : `Message sent in chat ${chatId}.`,
+        details: {
+          chatId,
+          senderId: authenticatedUserId,
+          senderUsername,
+          preview,
+        },
+      });
 
       const normalizedSenderId = normalizeUserId(authenticatedUserId);
       const recipients = collectNormalizedRecipientIds({ recipientId, recipientIds });

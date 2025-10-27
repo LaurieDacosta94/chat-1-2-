@@ -190,6 +190,64 @@ body.dark {
   color: rgba(27, 31, 59, 0.6);
 }
 
+.admin-activity {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.admin-activity__item {
+  background: rgba(15, 23, 42, 0.04);
+  border-radius: 14px;
+  padding: 0.9rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.admin-activity__meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.admin-activity__summary {
+  font-weight: 600;
+}
+
+.admin-activity__meta time {
+  font-size: 0.85rem;
+  color: rgba(27, 31, 59, 0.65);
+}
+
+.admin-activity__details {
+  margin: 0;
+  font-family: 'SFMono-Regular', 'Consolas', 'Liberation Mono', 'Menlo', monospace;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  background: rgba(15, 23, 42, 0.04);
+  border-radius: 12px;
+  padding: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+body.dark .admin-activity__item {
+  background: rgba(148, 163, 184, 0.15);
+}
+
+body.dark .admin-activity__details {
+  background: rgba(148, 163, 184, 0.12);
+}
+
+body.dark .admin-activity__meta time {
+  color: rgba(248, 250, 252, 0.75);
+}
+
 .admin-danger {
   display: flex;
   flex-wrap: wrap;
