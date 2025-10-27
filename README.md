@@ -109,3 +109,18 @@ The PostgreSQL schema lives in [`db/schema.sql`](db/schema.sql) and contains:
 - `messages` — Stores chat messages with sender relationships and timestamps.
 
 Run the file against your Render PostgreSQL instance to set up the tables and indexes.
+
+## Development admin console
+
+For quick local resets there is a lightweight admin console at [`admin.html`](admin.html).
+Open the file in a browser (or serve it alongside the main frontend) and sign in with the
+development admin account. By default it targets `http://localhost:3001`; change the
+`data-api-base` attribute on the `<body>` element to point at a different backend when needed.
+
+- **Default credentials:** `admin` / `admin-dev-password-change-me`
+- **Custom credentials:** set `DEV_ADMIN_USERNAME` and `DEV_ADMIN_PASSWORD`
+
+The helper account is automatically created on server start when `ENABLE_DEV_ADMIN` is not
+explicitly set to `false` (defaults to `true` for non-production environments). You can remove
+the tooling entirely by setting `ENABLE_DEV_ADMIN=false` or deleting `admin.html` when you no
+longer need it.
