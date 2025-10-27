@@ -64,6 +64,8 @@ const newContactCloseButton = document.getElementById("new-contact-close");
 const newContactCancelButton = document.getElementById("new-contact-cancel");
 const newContactPreviewElement = document.getElementById("new-contact-preview");
 const newContactLookupElement = document.getElementById("new-contact-lookup");
+const newContactSuggestionsElement = document.getElementById("new-contact-suggestions");
+const newContactSuggestionsList = document.getElementById("new-contact-suggestions-list");
 const newContactBackButton = document.getElementById("new-contact-back");
 const newChatListView = document.getElementById("new-chat-list-view");
 const newChatContactListElement = document.getElementById("new-chat-contact-list");
@@ -77,9 +79,6 @@ const newContactFieldGroups = newContactForm
   ? Array.from(newContactForm.querySelectorAll("[data-contact-fields]"))
   : [];
 const newContactNicknameInput = document.getElementById("new-contact-nickname");
-const newContactNicknameNotesInput = document.getElementById(
-  "new-contact-nickname-notes"
-);
 const newContactPhoneInput = document.getElementById("new-contact-phone");
 const newContactPhoneNameInput = document.getElementById("new-contact-phone-name");
 const newContactEmailInput = document.getElementById("new-contact-email");
@@ -958,7 +957,10 @@ function deriveContactStatus(contact) {
       if (normalized.notes) {
         return sanitizeStatus(normalized.notes);
       }
-      return "Added via nickname";
+      if (normalized.nickname) {
+        return sanitizeStatus(`@${normalized.nickname}`);
+      }
+      return "Ready to chat";
     }
     case ContactMethod.PHONE: {
       if (normalized.phoneDisplay) {
@@ -4201,7 +4203,6 @@ function collectNewContactData({ strict = false, showErrors = false } = {}) {
   switch (method) {
     case ContactMethod.NICKNAME: {
       const nickname = newContactNicknameInput?.value.trim() ?? "";
-      const notes = newContactNicknameNotesInput?.value.trim() ?? "";
       if (!nickname && strict) {
         if (showErrors) {
           showToast("Enter a nickname");
@@ -4211,7 +4212,6 @@ function collectNewContactData({ strict = false, showErrors = false } = {}) {
       }
       contact.nickname = nickname;
       contact.displayName = nickname;
-      contact.notes = notes;
       break;
     }
     case ContactMethod.PHONE: {
@@ -4344,10 +4344,20 @@ function updateNewContactPreview() {
 
   const displayName = contact.displayName || "New contact";
   const status = getContactPreviewText(contact);
-  const methodLabel = getContactMethodLabel(contact.method);
   const details = [];
   if (status) details.push(status);
-  if (methodLabel) details.push(`Added from ${methodLabel}`);
+  const normalizedNickname =
+    typeof contact.nickname === "string" ? contact.nickname.trim().toLowerCase() : "";
+  const hasLookupMatch =
+    contactLookupState.status === ContactLookupStatus.FOUND &&
+    contactLookupState.results.some((entry) =>
+      typeof entry?.username === "string"
+        ? entry.username.trim().toLowerCase() === normalizedNickname && normalizedNickname
+        : false
+    );
+  if (hasLookupMatch) {
+    details.push("Existing account");
+  }
   const description = details.join(" • ") || "Ready to start chatting.";
 
   newContactPreviewElement.innerHTML = "";
@@ -4357,6 +4367,48 @@ function updateNewContactPreview() {
   const descriptionNode = document.createElement("span");
   descriptionNode.textContent = description;
   newContactPreviewElement.appendChild(descriptionNode);
+}
+
+function renderContactSuggestions(results, query = "") {
+  if (!newContactSuggestionsElement || !newContactSuggestionsList) {
+    return;
+  }
+
+  newContactSuggestionsList.innerHTML = "";
+
+  const entries = Array.isArray(results)
+    ? results.filter((entry) => entry && typeof entry.username === "string" && entry.username.trim())
+    : [];
+
+  if (!entries.length) {
+    newContactSuggestionsElement.hidden = true;
+    newContactSuggestionsElement.setAttribute("aria-hidden", "true");
+    return;
+  }
+
+  newContactSuggestionsElement.hidden = false;
+  newContactSuggestionsElement.setAttribute("aria-hidden", "false");
+
+  const trimmedQuery = typeof query === "string" ? query.trim() : "";
+
+  entries.slice(0, 6).forEach((entry) => {
+    const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "new-contact__suggestion";
+    button.dataset.username = entry.username;
+    button.setAttribute("role", "option");
+
+    const labelFragment = createHighlightedFragment(entry.username, trimmedQuery);
+    button.appendChild(labelFragment);
+
+    const meta = document.createElement("span");
+    meta.textContent = "Existing user";
+    button.appendChild(meta);
+
+    item.appendChild(button);
+    newContactSuggestionsList.appendChild(item);
+  });
 }
 
 function clearContactLookupTimer() {
@@ -4387,8 +4439,10 @@ function setContactLookupState({ status, results, message } = {}) {
   );
   newContactLookupElement.textContent = "";
 
+  renderContactSuggestions(currentResults, newContactNicknameInput?.value ?? "");
+
   if (currentStatus === ContactLookupStatus.SEARCHING) {
-    newContactLookupElement.textContent = "Looking up accounts…";
+    newContactLookupElement.textContent = "Searching for users…";
     return;
   }
 
@@ -4396,17 +4450,17 @@ function setContactLookupState({ status, results, message } = {}) {
     newContactLookupElement.classList.add("new-contact__lookup--success");
     if (currentResults.length === 1) {
       const strong = document.createElement("strong");
-      strong.textContent = currentResults[0].username;
+      strong.textContent = "Existing account found";
       newContactLookupElement.append(strong);
       newContactLookupElement.append(
-        document.createTextNode(" is already here. We'll link the chat to their account.")
+        document.createTextNode(" Select it below or continue to add this contact.")
       );
     } else {
       const strong = document.createElement("strong");
-      strong.textContent = `${currentResults.length} accounts found`;
+      strong.textContent = `${currentResults.length} matching accounts`;
       newContactLookupElement.append(strong);
       newContactLookupElement.append(
-        document.createTextNode(". Choose the best match before saving.")
+        document.createTextNode(". Pick one below or keep typing to narrow it down.")
       );
     }
     return;
@@ -4427,7 +4481,7 @@ function setContactLookupState({ status, results, message } = {}) {
   }
 
   const idleMessage =
-    currentMessage || "Search by nickname or email to see if they already have an account.";
+    currentMessage || "Start typing a username to check if they already have an account.";
   newContactLookupElement.textContent = idleMessage;
 }
 
@@ -4522,6 +4576,31 @@ function handleContactLookupInput() {
   } else if (method === ContactMethod.EMAIL) {
     scheduleContactLookup(newContactEmailInput?.value ?? "");
   }
+}
+
+function handleContactSuggestionClick(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+
+  const button = target.closest("button[data-username]");
+  if (!(button instanceof HTMLButtonElement)) {
+    return;
+  }
+
+  const username = button.dataset.username ?? "";
+  if (!username || !(newContactNicknameInput instanceof HTMLInputElement)) {
+    return;
+  }
+
+  newContactNicknameInput.value = username;
+  if (typeof newContactNicknameInput.setSelectionRange === "function") {
+    const length = username.length;
+    newContactNicknameInput.setSelectionRange(length, length);
+  }
+  newContactNicknameInput.focus();
+  newContactNicknameInput.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 function renderNewChatContacts(query = newChatSearchInput?.value ?? "") {
@@ -5363,6 +5442,9 @@ function hydrate() {
   }
   if (newContactEmailInput) {
     newContactEmailInput.addEventListener("input", handleContactLookupInput);
+  }
+  if (newContactSuggestionsList) {
+    newContactSuggestionsList.addEventListener("click", handleContactSuggestionClick);
   }
   newContactMethodInputs.forEach((input) => {
     input.addEventListener("change", (event) => {

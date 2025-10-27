@@ -512,161 +512,41 @@
           data-view="form"
           hidden
         >
-          <fieldset class="new-contact__methods">
-            <legend class="new-contact__legend">Add contact from</legend>
-            <label class="new-contact__method">
-              <input type="radio" name="contact-method" value="nickname" checked />
-              <span>Nickname</span>
-            </label>
-            <label class="new-contact__method">
-              <input type="radio" name="contact-method" value="phone" />
-              <span>Phone number</span>
-            </label>
-            <label class="new-contact__method">
-              <input type="radio" name="contact-method" value="email" />
-              <span>Email address</span>
-            </label>
-            <label class="new-contact__method">
-              <input type="radio" name="contact-method" value="contact-card" />
-              <span>Contact share</span>
-            </label>
-            <label class="new-contact__method">
-              <input type="radio" name="contact-method" value="group" />
-              <span>Group chat</span>
-            </label>
-          </fieldset>
-          <div class="new-contact__lookup" id="new-contact-lookup" aria-live="polite">
-            Search by nickname or email to see if they already have an account.
-          </div>
+          <p class="new-contact__intro">
+            Search for someone already using the app or add a new username to start chatting
+            right away.
+          </p>
           <div class="new-contact__fields" data-contact-fields="nickname">
             <label class="new-contact__field">
-              <span class="new-contact__label">Nickname</span>
+              <span class="new-contact__label">Username</span>
               <input
                 type="text"
                 id="new-contact-nickname"
                 name="nickname"
                 autocomplete="off"
+                placeholder="Enter a username"
                 required
-              />
-            </label>
-            <label class="new-contact__field">
-              <span class="new-contact__label">Notes (optional)</span>
-              <textarea
-                id="new-contact-nickname-notes"
-                name="nickname-notes"
-                rows="2"
-              ></textarea>
-            </label>
-          </div>
-          <div class="new-contact__fields" data-contact-fields="phone" hidden>
-            <label class="new-contact__field">
-              <span class="new-contact__label">Phone number</span>
-              <input
-                type="tel"
-                id="new-contact-phone"
-                name="phone"
-                inputmode="tel"
-                autocomplete="tel"
-                pattern=".*\\d.*"
-                required
-                disabled
-              />
-              <span class="new-contact__description">Include country code if you have it.</span>
-            </label>
-            <label class="new-contact__field">
-              <span class="new-contact__label">Display name (optional)</span>
-              <input
-                type="text"
-                id="new-contact-phone-name"
-                name="phone-name"
-                autocomplete="name"
-                disabled
               />
             </label>
           </div>
-          <div class="new-contact__fields" data-contact-fields="email" hidden>
-            <label class="new-contact__field">
-              <span class="new-contact__label">Email address</span>
-              <input
-                type="email"
-                id="new-contact-email"
-                name="email"
-                autocomplete="email"
-                required
-                disabled
-              />
-            </label>
-            <label class="new-contact__field">
-              <span class="new-contact__label">Display name (optional)</span>
-              <input
-                type="text"
-                id="new-contact-email-name"
-                name="email-name"
-                autocomplete="name"
-                disabled
-              />
-            </label>
+          <div class="new-contact__lookup" id="new-contact-lookup" aria-live="polite">
+            Start typing a username to check if they already have an account.
           </div>
-          <div class="new-contact__fields" data-contact-fields="contact-card" hidden>
-            <label class="new-contact__field">
-              <span class="new-contact__label">Display name (optional)</span>
-              <input
-                type="text"
-                id="new-contact-card-name"
-                name="card-name"
-                autocomplete="name"
-                disabled
-              />
-            </label>
-            <label class="new-contact__field">
-              <span class="new-contact__label">Contact details</span>
-              <textarea
-                id="new-contact-card-details"
-                name="card-details"
-                rows="4"
-                placeholder="Paste a contact card, email signature, or any contact details"
-                required
-                disabled
-              ></textarea>
-              <span class="new-contact__description"
-                >We'll pull out names, phone numbers, and email addresses automatically.</span
-              >
-            </label>
-          </div>
-          <div class="new-contact__fields" data-contact-fields="group" hidden>
-            <label class="new-contact__field">
-              <span class="new-contact__label">Group name</span>
-              <input
-                type="text"
-                id="new-group-name"
-                name="group-name"
-                maxlength="80"
-                required
-                disabled
-              />
-            </label>
-            <label class="new-contact__field">
-              <span class="new-contact__label">Participants</span>
-              <textarea
-                id="new-group-participants"
-                name="group-participants"
-                rows="3"
-                placeholder="Add names separated by commas"
-                disabled
-              ></textarea>
-              <span class="new-contact__description"
-                >Add at least two participants. You can update the list later.</span
-              >
-            </label>
-            <label class="new-contact__field">
-              <span class="new-contact__label">Group description (optional)</span>
-              <textarea
-                id="new-group-description"
-                name="group-description"
-                rows="2"
-                disabled
-              ></textarea>
-            </label>
+          <div
+            class="new-contact__suggestions"
+            id="new-contact-suggestions"
+            aria-live="polite"
+            hidden
+          >
+            <div class="new-contact__suggestions-title" id="new-contact-suggestions-title">
+              Matching accounts
+            </div>
+            <ul
+              class="new-contact__suggestions-list"
+              id="new-contact-suggestions-list"
+              role="listbox"
+              aria-labelledby="new-contact-suggestions-title"
+            ></ul>
           </div>
           <div class="new-contact__preview" id="new-contact-preview" aria-live="polite">
             Provide details to preview the chat.
