@@ -167,10 +167,12 @@ function createInMemoryStore() {
     },
     insertMessage({ chatId, senderId, content }) {
       const timestamp = new Date().toISOString();
+      const sender = senderId ? usersById.get(senderId) : null;
       const record = {
         id: nextMessageId++,
         chat_id: chatId,
         sender_id: senderId,
+        sender_username: sender ? sender.username : null,
         content,
         timestamp,
       };
@@ -766,11 +768,17 @@ async function fetchRecentMessages(chatId, limit = MAX_CHAT_HISTORY) {
 
   try {
     const result = await pool.query(
-      `SELECT id, chat_id, sender_id, content, timestamp
-       FROM messages
-       WHERE chat_id = $1
-       ORDER BY timestamp DESC
-       LIMIT $2`,
+      `SELECT m.id,
+              m.chat_id,
+              m.sender_id,
+              u.username AS sender_username,
+              m.content,
+              m.timestamp
+         FROM messages m
+         LEFT JOIN users u ON m.sender_id = u.id
+        WHERE m.chat_id = $1
+        ORDER BY m.timestamp DESC
+        LIMIT $2`,
       [chatId, limit]
     );
     return result.rows
@@ -1082,13 +1090,6 @@ io.on('connection', (socket) => {
       }
 
       try {
-        const message = await saveMessage({ chatId, senderId: authenticatedUserId, content });
-        const payload = { ...message, chat_id: chatId };
-        if (clientMessageId) {
-          payload.client_id = clientMessageId;
-        }
-        io.to(chatId).emit('message', payload);
-
         let senderUsername = null;
         try {
           const sender = await findUserById(authenticatedUserId);
@@ -1096,6 +1097,16 @@ io.on('connection', (socket) => {
         } catch (_lookupError) {
           senderUsername = null;
         }
+
+        const message = await saveMessage({ chatId, senderId: authenticatedUserId, content });
+        const payload = { ...message, chat_id: chatId };
+        if (senderUsername && !payload.sender_username) {
+          payload.sender_username = senderUsername;
+        }
+        if (clientMessageId) {
+          payload.client_id = clientMessageId;
+        }
+        io.to(chatId).emit('message', payload);
 
         const preview =
           typeof content === 'string'

@@ -1112,6 +1112,22 @@ function getContactAccountId(contact) {
   return normalized.accountId ?? null;
 }
 
+function findContactByAccountId(accountId) {
+  const normalizedId = normalizeAccountId(accountId);
+  if (!normalizedId) {
+    return null;
+  }
+
+  for (const contact of contacts) {
+    const normalized = normalizeContact(contact);
+    if (normalized?.accountId === normalizedId) {
+      return normalized;
+    }
+  }
+
+  return null;
+}
+
 function contactsMatch(contactA, contactB) {
   const normalizedA = normalizeContact(contactA);
   const normalizedB = normalizeContact(contactB);
@@ -2360,15 +2376,133 @@ function buildLocalMessageFromServer(chatId, payload) {
   return message;
 }
 
+function bootstrapChatFromServerPayload(chatId, serverPayloads) {
+  const normalizedChatId = normalizeChatIdentifier(chatId);
+  if (!normalizedChatId) {
+    return null;
+  }
+
+  if (chats.some((candidate) => candidate.id === normalizedChatId)) {
+    return chats.find((candidate) => candidate.id === normalizedChatId) ?? null;
+  }
+
+  const payloads = Array.isArray(serverPayloads) ? serverPayloads : [];
+  const referencePayload = payloads.find((payload) => payload && typeof payload === "object") ?? null;
+
+  const senderAccountId = referencePayload ? normalizeAccountId(referencePayload.sender_id) : null;
+  let contactDetails = senderAccountId ? findContactByAccountId(senderAccountId) : null;
+  if (!contactDetails && senderAccountId) {
+    contactDetails = { accountId: senderAccountId };
+  }
+
+  const senderUsername =
+    typeof referencePayload?.sender_username === "string" && referencePayload.sender_username.trim()
+      ? referencePayload.sender_username.trim()
+      : "";
+
+  if (contactDetails) {
+    if (!contactDetails.displayName && senderUsername) {
+      contactDetails.displayName = senderUsername;
+    }
+    if (!contactDetails.nickname && senderUsername) {
+      contactDetails.nickname = senderUsername;
+    }
+  } else if (senderUsername) {
+    contactDetails = { displayName: senderUsername, nickname: senderUsername };
+  }
+
+  let storedContact = null;
+  if (contactDetails) {
+    const { contact: resultContact } = upsertContact(contactDetails);
+    storedContact = resultContact ?? normalizeContact(contactDetails);
+  }
+
+  const chatName =
+    storedContact?.displayName || storedContact?.nickname || senderUsername || "New chat";
+
+  const baseChat = {
+    id: normalizedChatId,
+    name: chatName,
+    type: ChatType.DIRECT,
+    messages: [],
+  };
+
+  if (storedContact) {
+    baseChat.contact = storedContact;
+  }
+
+  const hydratedChat = normalizeChat(baseChat);
+
+  chats = [hydratedChat, ...chats];
+  realtimeState.pendingChatJoins.add(normalizedChatId);
+  flushPendingChatJoins();
+
+  return hydratedChat;
+}
+
+function applyIncomingContactMetadata(chat, payload) {
+  if (!chat || chat.type !== ChatType.DIRECT) {
+    return false;
+  }
+
+  const senderAccountId = normalizeAccountId(payload?.sender_id);
+  const currentUserId = normalizeAccountId(authState?.user?.id);
+  if (senderAccountId && currentUserId && senderAccountId === currentUserId) {
+    return false;
+  }
+
+  const senderUsername =
+    typeof payload?.sender_username === "string" && payload.sender_username.trim()
+      ? payload.sender_username.trim()
+      : "";
+
+  const existingContact = normalizeContact(chat.contact);
+  const nextContact = existingContact ? { ...existingContact } : {};
+  let mutated = false;
+
+  if (senderAccountId && nextContact.accountId !== senderAccountId) {
+    nextContact.accountId = senderAccountId;
+    mutated = true;
+  }
+
+  if (senderUsername) {
+    if (!nextContact.displayName) {
+      nextContact.displayName = senderUsername;
+      mutated = true;
+    }
+    if (!nextContact.nickname) {
+      nextContact.nickname = senderUsername;
+      mutated = true;
+    }
+  }
+
+  if (!mutated) {
+    return false;
+  }
+
+  const { contact: storedContact } = upsertContact(nextContact);
+  const normalizedContact = storedContact ?? normalizeContact(nextContact);
+  if (!normalizedContact) {
+    return false;
+  }
+
+  const normalizedChat = normalizeChat({ ...chat, contact: normalizedContact });
+  Object.assign(chat, normalizedChat);
+  return true;
+}
+
 function applyServerMessages(chatId, serverPayloads, { replaceExisting = false } = {}) {
   const normalizedChatId = normalizeChatIdentifier(chatId);
   if (!normalizedChatId) {
     return;
   }
 
-  const chat = chats.find((candidate) => candidate.id === normalizedChatId);
+  let chat = chats.find((candidate) => candidate.id === normalizedChatId);
   if (!chat) {
-    return;
+    chat = bootstrapChatFromServerPayload(normalizedChatId, serverPayloads);
+    if (!chat) {
+      return;
+    }
   }
 
   const serverMessageIds = getServerMessageSet(normalizedChatId);
@@ -2384,6 +2518,11 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false }
 
   const payloads = Array.isArray(serverPayloads) ? serverPayloads : [];
   payloads.forEach((payload) => {
+    const contactMutated = applyIncomingContactMetadata(chat, payload);
+    if (contactMutated) {
+      mutated = true;
+    }
+
     const normalizedMessage = buildLocalMessageFromServer(normalizedChatId, payload);
     if (!normalizedMessage) {
       return;
@@ -2721,14 +2860,16 @@ function reloadStateForActiveUser({ preserveChat = false } = {}) {
   resumePendingStatuses();
 }
 
-function resetAppDataToDefaults({ auth } = {}) {
+function resetAppDataToDefaults({ auth, removeStoredData = true } = {}) {
   clearPendingAttachments();
   const namespace = getStorageNamespace(auth ?? authState);
-  deleteNamespacedStorage(STORAGE_KEY, namespace);
-  deleteNamespacedStorage(DRAFTS_STORAGE_KEY, namespace);
-  deleteNamespacedStorage(ATTACHMENT_DRAFTS_STORAGE_KEY, namespace);
-  deleteNamespacedStorage(PROFILE_STORAGE_KEY, namespace);
-  deleteNamespacedStorage(CONTACTS_STORAGE_KEY, namespace);
+  if (removeStoredData) {
+    deleteNamespacedStorage(STORAGE_KEY, namespace);
+    deleteNamespacedStorage(DRAFTS_STORAGE_KEY, namespace);
+    deleteNamespacedStorage(ATTACHMENT_DRAFTS_STORAGE_KEY, namespace);
+    deleteNamespacedStorage(PROFILE_STORAGE_KEY, namespace);
+    deleteNamespacedStorage(CONTACTS_STORAGE_KEY, namespace);
+  }
 
   reloadStateForActiveUser({ preserveChat: false });
 
@@ -2752,7 +2893,7 @@ function resetAppDataToDefaults({ auth } = {}) {
 function handleSignOut() {
   const previousAuth = authState;
   setAuthState(null);
-  resetAppDataToDefaults({ auth: previousAuth });
+  resetAppDataToDefaults({ auth: previousAuth, removeStoredData: false });
   showToast("Signed out");
 }
 
@@ -6363,7 +6504,7 @@ function hydrate() {
     }
 
     disconnectRealtime({ keepSocket: true });
-    resetAppDataToDefaults({ auth: previousAuth });
+    resetAppDataToDefaults({ auth: previousAuth, removeStoredData: false });
     setActiveAuthView(AuthView.LOGIN);
     updateAuthUI();
   });
