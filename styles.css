@@ -1240,6 +1240,10 @@ body.modal-open {
   gap: 1rem;
 }
 
+.new-chat__view[hidden] {
+  display: none !important;
+}
+
 .new-chat__intro {
   margin: 0;
   font-size: 0.95rem;
@@ -1748,6 +1752,10 @@ body.modal-open {
   border-radius: 0.75rem;
   padding: 1rem;
   background: rgba(255, 255, 255, 0.04);
+}
+
+.new-contact__fields[hidden] {
+  display: none !important;
 }
 
 .new-contact__lookup {
