@@ -91,6 +91,24 @@ function createInMemoryStore() {
       const record = usersByUsername.get(username);
       return record ? { ...record } : null;
     },
+    searchUsers(query, limit = 5) {
+      const normalizedQuery = query.trim().toLowerCase();
+      if (!normalizedQuery) {
+        return [];
+      }
+
+      const maxResults = Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 25) : 5;
+      const results = [];
+      for (const record of usersByUsername.values()) {
+        if (results.length >= maxResults) {
+          break;
+        }
+        if (record.username.toLowerCase().includes(normalizedQuery)) {
+          results.push({ id: record.id, username: record.username });
+        }
+      }
+      return results;
+    },
     insertMessage({ chatId, senderId, content }) {
       const timestamp = new Date().toISOString();
       const record = {
@@ -293,6 +311,31 @@ async function findUserByUsername(username) {
   }
 }
 
+async function searchUsers(query, limit = 5) {
+  const normalizedLimit = Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 25) : 5;
+
+  if (useInMemoryStore || !pool) {
+    return inMemoryStore.searchUsers(query, normalizedLimit);
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT id, username
+       FROM users
+       WHERE username ILIKE $1
+       ORDER BY username ASC
+       LIMIT $2`,
+      [`%${query}%`, normalizedLimit]
+    );
+    return result.rows;
+  } catch (error) {
+    if (enableInMemoryFallback(error)) {
+      return inMemoryStore.searchUsers(query, normalizedLimit);
+    }
+    throw error;
+  }
+}
+
 async function saveMessage({ chatId, senderId, content }) {
   if (useInMemoryStore || !pool) {
     return inMemoryStore.insertMessage({ chatId, senderId, content });
@@ -316,6 +359,31 @@ async function saveMessage({ chatId, senderId, content }) {
     }
     throw error;
   }
+}
+
+function extractTokenFromHeader(req) {
+  const header = typeof req.headers.authorization === 'string' ? req.headers.authorization.trim() : '';
+  if (!header || !header.toLowerCase().startsWith('bearer ')) {
+    return null;
+  }
+  const token = header.slice(7).trim();
+  return token || null;
+}
+
+function requireHttpAuth(req, res) {
+  const token = extractTokenFromHeader(req);
+  if (!token) {
+    res.status(401).json({ error: 'Authorization required.' });
+    return null;
+  }
+
+  const payload = verifyToken(token);
+  if (!payload || !payload.userId) {
+    res.status(401).json({ error: 'Invalid token.' });
+    return null;
+  }
+
+  return payload.userId;
 }
 
 async function fetchRecentMessages(chatId, limit = MAX_CHAT_HISTORY) {
@@ -413,6 +481,31 @@ app.post('/api/login', async (req, res) => {
   } catch (error) {
     console.error('Error logging in', error);
     res.status(500).json({ error: 'Failed to authenticate user.' });
+  }
+});
+
+app.get('/api/users/search', async (req, res) => {
+  const userId = requireHttpAuth(req, res);
+  if (!userId) {
+    return;
+  }
+
+  const query = typeof req.query.query === 'string' ? req.query.query.trim() : '';
+  const limitRaw = typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : undefined;
+
+  if (!query) {
+    return res.status(400).json({ error: 'Search query is required.' });
+  }
+
+  try {
+    const results = await searchUsers(query, limitRaw);
+    const filtered = results.filter((user) => user && user.id !== userId);
+    res.json({
+      results: filtered.map((user) => ({ id: user.id, username: user.username })),
+    });
+  } catch (error) {
+    console.error('Error searching for users', error);
+    res.status(500).json({ error: 'Failed to search users.' });
   }
 });
 

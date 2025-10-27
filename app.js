@@ -63,6 +63,13 @@ const newContactForm = document.getElementById("new-contact-form");
 const newContactCloseButton = document.getElementById("new-contact-close");
 const newContactCancelButton = document.getElementById("new-contact-cancel");
 const newContactPreviewElement = document.getElementById("new-contact-preview");
+const newContactLookupElement = document.getElementById("new-contact-lookup");
+const newContactBackButton = document.getElementById("new-contact-back");
+const newChatListView = document.getElementById("new-chat-list-view");
+const newChatContactListElement = document.getElementById("new-chat-contact-list");
+const newChatEmptyElement = document.getElementById("new-chat-empty");
+const newChatSearchInput = document.getElementById("new-chat-search");
+const newChatAddContactButton = document.getElementById("new-chat-add-contact");
 const newContactMethodInputs = newContactForm
   ? Array.from(newContactForm.querySelectorAll('input[name="contact-method"]'))
   : [];
@@ -132,6 +139,8 @@ const WALLPAPER_STORAGE_KEY = "whatsapp-clone-wallpaper";
 const ATTACHMENT_DRAFTS_STORAGE_KEY = "whatsapp-clone-attachment-drafts-v1";
 const PROFILE_STORAGE_KEY = "whatsapp-clone-profile-v1";
 const AUTH_STORAGE_KEY = "whatsapp-clone-auth-v1";
+const CONTACTS_STORAGE_KEY = "whatsapp-clone-contacts-v1";
+const STORAGE_NAMESPACE_DEFAULT = "demo";
 const apiBaseFromDataset =
   typeof document !== "undefined" && document.body?.dataset?.apiBase
     ? document.body.dataset.apiBase.trim()
@@ -153,6 +162,15 @@ const API_BASE_URL = (() => {
   return window.location.origin.replace(/\/+$/, "");
 })();
 const MAX_COMPOSER_ATTACHMENTS = 6;
+const CONTACT_LOOKUP_DEBOUNCE_MS = 350;
+
+const ContactLookupStatus = {
+  IDLE: "idle",
+  SEARCHING: "searching",
+  FOUND: "found",
+  NOT_FOUND: "not_found",
+  ERROR: "error",
+};
 
 const Theme = {
   DARK: "dark",
@@ -805,6 +823,29 @@ function parseSharedContactDetails(text) {
   return result;
 }
 
+function buildContactLookupKey(contact) {
+  if (!contact || typeof contact !== "object") return "";
+
+  if (typeof contact.email === "string" && contact.email.trim()) {
+    return `email:${contact.email.trim().toLowerCase()}`;
+  }
+
+  if (typeof contact.phone === "string" && contact.phone.trim()) {
+    return `phone:${contact.phone.trim()}`;
+  }
+
+  if (typeof contact.nickname === "string" && contact.nickname.trim()) {
+    return `nick:${contact.nickname.trim().toLowerCase()}`;
+  }
+
+  if (typeof contact.displayName === "string" && contact.displayName.trim()) {
+    const method = typeof contact.method === "string" ? contact.method.toLowerCase() : "";
+    return `name:${contact.displayName.trim().toLowerCase()}|${method}`;
+  }
+
+  return "";
+}
+
 function normalizeContact(contact) {
   if (!contact || typeof contact !== "object") return null;
 
@@ -875,6 +916,27 @@ function normalizeContact(contact) {
 
   if (!normalized.displayName && !normalized.phone && !normalized.email) {
     return null;
+  }
+
+  const incomingId =
+    typeof contact.id === "string" && contact.id.trim() ? contact.id.trim() : "";
+  const incomingLookup =
+    typeof contact.lookupKey === "string" && contact.lookupKey.trim()
+      ? contact.lookupKey.trim()
+      : "";
+  const derivedLookup = buildContactLookupKey({ ...normalized, method });
+  if (incomingLookup) {
+    normalized.lookupKey = incomingLookup;
+  } else if (derivedLookup) {
+    normalized.lookupKey = derivedLookup;
+  }
+
+  if (incomingId) {
+    normalized.id = incomingId;
+  } else if (normalized.lookupKey) {
+    normalized.id = normalized.lookupKey;
+  } else {
+    normalized.id = typeof crypto?.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
   }
 
   return normalized;
@@ -957,6 +1019,162 @@ function buildContactTooltip(contact) {
   }
 
   return parts.join(" • ");
+}
+
+function getContactKey(contact) {
+  const normalized = normalizeContact(contact);
+  if (!normalized) return "";
+  return normalized.id || normalized.lookupKey || "";
+}
+
+function contactsMatch(contactA, contactB) {
+  const normalizedA = normalizeContact(contactA);
+  const normalizedB = normalizeContact(contactB);
+  if (!normalizedA || !normalizedB) return false;
+
+  if (normalizedA.id && normalizedB.id && normalizedA.id === normalizedB.id) {
+    return true;
+  }
+
+  if (
+    normalizedA.lookupKey &&
+    normalizedB.lookupKey &&
+    normalizedA.lookupKey === normalizedB.lookupKey
+  ) {
+    return true;
+  }
+
+  if (normalizedA.email && normalizedB.email && normalizedA.email === normalizedB.email) {
+    return true;
+  }
+
+  if (normalizedA.phone && normalizedB.phone && normalizedA.phone === normalizedB.phone) {
+    return true;
+  }
+
+  if (
+    normalizedA.nickname &&
+    normalizedB.nickname &&
+    normalizedA.nickname.toLowerCase() === normalizedB.nickname.toLowerCase()
+  ) {
+    return true;
+  }
+
+  if (
+    normalizedA.displayName &&
+    normalizedB.displayName &&
+    normalizedA.displayName.toLowerCase() === normalizedB.displayName.toLowerCase() &&
+    normalizedA.method === normalizedB.method
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function loadContacts() {
+  try {
+    const namespace = getStorageNamespace();
+    const store = readNamespacedStorage(CONTACTS_STORAGE_KEY);
+    const raw = store[namespace];
+    if (!Array.isArray(raw)) {
+      return [];
+    }
+    return raw.map(normalizeContact).filter(Boolean);
+  } catch (error) {
+    console.error("Failed to load contacts", error);
+    return [];
+  }
+}
+
+function saveContacts(state) {
+  const namespace = getStorageNamespace();
+  const sanitized = (state ?? []).map(normalizeContact).filter(Boolean);
+  writeNamespacedStorage(CONTACTS_STORAGE_KEY, namespace, sanitized);
+}
+
+function sortContacts(list) {
+  return [...list].sort((a, b) => {
+    const nameA = a.displayName?.toLowerCase() ?? "";
+    const nameB = b.displayName?.toLowerCase() ?? "";
+    if (nameA && nameB) {
+      return nameA.localeCompare(nameB, undefined, { sensitivity: "base" });
+    }
+    if (nameA) return -1;
+    if (nameB) return 1;
+    return 0;
+  });
+}
+
+function contactMatchesQuery(contact, query) {
+  const normalized = normalizeContact(contact);
+  if (!normalized) return false;
+  if (!query) return true;
+  const haystacks = [
+    normalized.displayName,
+    normalized.nickname,
+    normalized.email,
+    normalized.phoneDisplay,
+    normalized.phone,
+    normalized.notes,
+  ]
+    .filter(Boolean)
+    .map((value) => value.toString().toLowerCase());
+  return haystacks.some((value) => value.includes(query));
+}
+
+function upsertContact(contact) {
+  const normalized = normalizeContact(contact);
+  if (!normalized) {
+    return { contact: null, added: false };
+  }
+
+  const existingIndex = contacts.findIndex((candidate) => contactsMatch(candidate, normalized));
+  if (existingIndex !== -1) {
+    const merged = { ...contacts[existingIndex], ...normalized };
+    contacts[existingIndex] = merged;
+    contacts = sortContacts(contacts);
+    saveContacts(contacts);
+    renderNewChatContacts();
+    return { contact: merged, added: false };
+  }
+
+  contacts = sortContacts([...contacts, normalized]);
+  saveContacts(contacts);
+  renderNewChatContacts();
+  return { contact: normalized, added: true };
+}
+
+function syncContactsFromChats() {
+  const contactMap = new Map();
+  contacts
+    .map(normalizeContact)
+    .filter(Boolean)
+    .forEach((contact) => {
+      const key = getContactKey(contact);
+      if (key) {
+        contactMap.set(key, contact);
+      }
+    });
+
+  chats
+    .filter((chat) => chat.type === ChatType.DIRECT && chat.contact)
+    .forEach((chat) => {
+      const normalized = normalizeContact(chat.contact);
+      if (!normalized) return;
+      const key = getContactKey(normalized);
+      if (!key) return;
+      if (contactMap.has(key)) {
+        const merged = { ...contactMap.get(key), ...normalized };
+        contactMap.set(key, merged);
+      } else {
+        contactMap.set(key, normalized);
+      }
+    });
+
+  contacts = sortContacts(Array.from(contactMap.values()));
+  saveContacts(contacts);
+  renderNewChatContacts();
 }
 
 function normalizeMessage(message) {
@@ -1256,33 +1474,88 @@ function setActiveFilter(nextFilter) {
   renderChats(chatSearchInput.value);
 }
 
+function getStorageNamespace(auth = authState) {
+  const username = auth?.user?.username;
+  if (typeof username === "string" && username.trim()) {
+    return `user:${username.trim().toLowerCase()}`;
+  }
+  return STORAGE_NAMESPACE_DEFAULT;
+}
+
+function readNamespacedStorage(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) {
+      return {};
+    }
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return { [STORAGE_NAMESPACE_DEFAULT]: parsed };
+    }
+    if (typeof parsed === "object" && parsed !== null) {
+      return parsed;
+    }
+  } catch (error) {
+    console.error(`Failed to parse storage for ${key}`, error);
+  }
+  return {};
+}
+
+function writeNamespacedStorage(key, namespace, value) {
+  const store = readNamespacedStorage(key);
+  store[namespace] = value;
+  localStorage.setItem(key, JSON.stringify(store));
+}
+
+function deleteNamespacedStorage(key, namespace) {
+  const store = readNamespacedStorage(key);
+  if (!Object.prototype.hasOwnProperty.call(store, namespace)) {
+    return;
+  }
+  delete store[namespace];
+  const remainingNamespaces = Object.keys(store);
+  if (remainingNamespaces.length === 0) {
+    localStorage.removeItem(key);
+    return;
+  }
+  localStorage.setItem(key, JSON.stringify(store));
+}
+
 function loadState() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw)
+    const namespace = getStorageNamespace();
+    const store = readNamespacedStorage(STORAGE_KEY);
+    const raw = store[namespace];
+    if (Array.isArray(raw)) {
+      return raw.map(normalizeChat).filter(Boolean);
+    }
+    if (namespace === STORAGE_NAMESPACE_DEFAULT) {
       return initialData.map(normalizeChat).filter(Boolean);
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed))
-      return initialData.map(normalizeChat).filter(Boolean);
-    return parsed.map(normalizeChat).filter(Boolean);
+    }
+    return [];
   } catch (error) {
     console.error("Failed to load chats", error);
-    return initialData.map(normalizeChat).filter(Boolean);
+    const namespace = getStorageNamespace();
+    if (namespace === STORAGE_NAMESPACE_DEFAULT) {
+      return initialData.map(normalizeChat).filter(Boolean);
+    }
+    return [];
   }
 }
 
 function saveState(state) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  const namespace = getStorageNamespace();
+  writeNamespacedStorage(STORAGE_KEY, namespace, state);
 }
 
 function loadDrafts() {
   try {
-    const raw = localStorage.getItem(DRAFTS_STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null) return {};
+    const namespace = getStorageNamespace();
+    const store = readNamespacedStorage(DRAFTS_STORAGE_KEY);
+    const raw = store[namespace];
+    if (typeof raw !== "object" || raw === null) return {};
     return Object.fromEntries(
-      Object.entries(parsed).filter(([, value]) => typeof value === "string")
+      Object.entries(raw).filter(([, value]) => typeof value === "string")
     );
   } catch (error) {
     console.error("Failed to load drafts", error);
@@ -1291,14 +1564,15 @@ function loadDrafts() {
 }
 
 function saveDrafts(state) {
-  localStorage.setItem(DRAFTS_STORAGE_KEY, JSON.stringify(state));
+  const namespace = getStorageNamespace();
+  writeNamespacedStorage(DRAFTS_STORAGE_KEY, namespace, state);
 }
 
 function loadAttachmentDrafts() {
   try {
-    const raw = localStorage.getItem(ATTACHMENT_DRAFTS_STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
+    const namespace = getStorageNamespace();
+    const store = readNamespacedStorage(ATTACHMENT_DRAFTS_STORAGE_KEY);
+    const parsed = store[namespace];
     if (typeof parsed !== "object" || parsed === null) return {};
     return Object.fromEntries(
       Object.entries(parsed)
@@ -1317,7 +1591,8 @@ function loadAttachmentDrafts() {
 }
 
 function saveAttachmentDrafts(state) {
-  localStorage.setItem(ATTACHMENT_DRAFTS_STORAGE_KEY, JSON.stringify(state));
+  const namespace = getStorageNamespace();
+  writeNamespacedStorage(ATTACHMENT_DRAFTS_STORAGE_KEY, namespace, state);
 }
 
 function normalizeProfile(value) {
@@ -1338,10 +1613,11 @@ function normalizeProfile(value) {
 
 function loadProfile() {
   try {
-    const raw = localStorage.getItem(PROFILE_STORAGE_KEY);
+    const namespace = getStorageNamespace();
+    const store = readNamespacedStorage(PROFILE_STORAGE_KEY);
+    const raw = store[namespace];
     if (!raw) return { ...defaultProfile };
-    const parsed = JSON.parse(raw);
-    return normalizeProfile(parsed);
+    return normalizeProfile(raw);
   } catch (error) {
     console.error("Failed to load profile", error);
     return { ...defaultProfile };
@@ -1349,7 +1625,8 @@ function loadProfile() {
 }
 
 function saveProfile(profile) {
-  localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profile));
+  const namespace = getStorageNamespace();
+  writeNamespacedStorage(PROFILE_STORAGE_KEY, namespace, profile);
 }
 
 function normalizeAuthState(value) {
@@ -1714,6 +1991,7 @@ function setAuthState(nextState) {
   authState = normalized;
   saveAuthState(authState);
   applyAuthenticatedUserToProfile(authState);
+  reloadStateForActiveUser({ preserveChat: false });
   updateAuthUI();
 }
 
@@ -1827,31 +2105,49 @@ async function handleSignupSubmit(event) {
   }
 }
 
-function resetAppDataToDefaults() {
-  clearPendingAttachments();
-  localStorage.removeItem(STORAGE_KEY);
-  localStorage.removeItem(DRAFTS_STORAGE_KEY);
-  localStorage.removeItem(ATTACHMENT_DRAFTS_STORAGE_KEY);
-  localStorage.removeItem(PROFILE_STORAGE_KEY);
+function reloadStateForActiveUser({ preserveChat = false } = {}) {
+  const previousChatId = preserveChat ? activeChatId : null;
 
   chats = loadState();
   drafts = loadDrafts();
   attachmentDrafts = loadAttachmentDrafts();
+  contacts = sortContacts(loadContacts());
+  syncContactsFromChats();
   activeProfile = loadProfile();
   updateProfileUI(activeProfile);
 
   pendingAttachments = [];
-  activeChatId = null;
+  if (!preserveChat) {
+    activeChatId = null;
+  } else if (previousChatId) {
+    activeChatId = previousChatId;
+  }
   activeFilter = Filter.ALL;
   if (chatSearchInput) {
     chatSearchInput.value = "";
   }
 
   updateFilterChips();
-  renderChats();
-  renderChatView(null);
+  renderChats(chatSearchInput?.value ?? "");
+  if (preserveChat && previousChatId) {
+    openChat(previousChatId);
+  } else {
+    renderChatView(null);
+  }
   renderComposerAttachments();
   resumePendingStatuses();
+}
+
+function resetAppDataToDefaults({ auth } = {}) {
+  clearPendingAttachments();
+  const namespace = getStorageNamespace(auth ?? authState);
+  deleteNamespacedStorage(STORAGE_KEY, namespace);
+  deleteNamespacedStorage(DRAFTS_STORAGE_KEY, namespace);
+  deleteNamespacedStorage(ATTACHMENT_DRAFTS_STORAGE_KEY, namespace);
+  deleteNamespacedStorage(PROFILE_STORAGE_KEY, namespace);
+  deleteNamespacedStorage(CONTACTS_STORAGE_KEY, namespace);
+
+  reloadStateForActiveUser({ preserveChat: false });
 
   if (settingsModal && !settingsModal.hidden) {
     closeSettings({ restoreFocus: false });
@@ -1871,8 +2167,9 @@ function resetAppDataToDefaults() {
 }
 
 function handleSignOut() {
+  const previousAuth = authState;
   setAuthState(null);
-  resetAppDataToDefaults();
+  resetAppDataToDefaults({ auth: previousAuth });
   showToast("Signed out");
 }
 
@@ -2234,10 +2531,12 @@ let authState = loadAuthState();
 let chats = loadState();
 let drafts = loadDrafts();
 let attachmentDrafts = loadAttachmentDrafts();
+let contacts = sortContacts(loadContacts());
 let activeProfile = loadProfile();
 if (authState) {
   applyAuthenticatedUserToProfile(authState, { persist: false });
 }
+syncContactsFromChats();
 let activeTheme = loadTheme();
 let activeWallpaper = loadWallpaper();
 let activeChatId = null;
@@ -2247,6 +2546,13 @@ let profileRestoreFocusTo = null;
 let newContactRestoreFocusTo = null;
 let pendingAttachments = [];
 let activeAuthView = AuthView.LOGIN;
+let contactLookupTimer = null;
+let contactLookupRequestId = 0;
+let contactLookupState = {
+  status: ContactLookupStatus.IDLE,
+  results: [],
+  message: "",
+};
 
 function getActiveChat() {
   return chats.find((chat) => chat.id === activeChatId) ?? null;
@@ -3222,7 +3528,8 @@ function createChat(nameInput, options = {}) {
   };
 
   if (normalizedContact && normalizedType !== ChatType.GROUP) {
-    newChat.contact = normalizedContact;
+    const { contact: storedContact } = upsertContact(normalizedContact);
+    newChat.contact = storedContact ?? normalizedContact;
   }
 
   const sanitizedStatus = sanitizeStatus(statusOverride);
@@ -3837,12 +4144,14 @@ function setActiveContactMethod(method, { focus = false } = {}) {
   }
 
   updateNewContactPreview();
+  refreshContactLookupForMethod();
 }
 
 function resetNewContactForm() {
   if (!newContactForm) return;
   newContactForm.reset();
   setActiveContactMethod(getActiveNewContactMethod());
+  resetContactLookup();
 }
 
 function collectNewContactData({ strict = false, showErrors = false } = {}) {
@@ -4043,6 +4352,389 @@ function updateNewContactPreview() {
   newContactPreviewElement.appendChild(descriptionNode);
 }
 
+function clearContactLookupTimer() {
+  if (contactLookupTimer) {
+    clearTimeout(contactLookupTimer);
+    contactLookupTimer = null;
+  }
+}
+
+function setContactLookupState({ status, results, message } = {}) {
+  contactLookupState = {
+    status: status ?? ContactLookupStatus.IDLE,
+    results: Array.isArray(results) ? results : [],
+    message: typeof message === "string" ? message : "",
+  };
+
+  if (!newContactLookupElement) {
+    return;
+  }
+
+  const { status: currentStatus, results: currentResults, message: currentMessage } =
+    contactLookupState;
+
+  newContactLookupElement.classList.remove(
+    "new-contact__lookup--success",
+    "new-contact__lookup--warning",
+    "new-contact__lookup--error"
+  );
+  newContactLookupElement.textContent = "";
+
+  if (currentStatus === ContactLookupStatus.SEARCHING) {
+    newContactLookupElement.textContent = "Looking up accounts…";
+    return;
+  }
+
+  if (currentStatus === ContactLookupStatus.FOUND && currentResults.length) {
+    newContactLookupElement.classList.add("new-contact__lookup--success");
+    if (currentResults.length === 1) {
+      const strong = document.createElement("strong");
+      strong.textContent = currentResults[0].username;
+      newContactLookupElement.append(strong);
+      newContactLookupElement.append(
+        document.createTextNode(" is already here. We'll link the chat to their account.")
+      );
+    } else {
+      const strong = document.createElement("strong");
+      strong.textContent = `${currentResults.length} accounts found`;
+      newContactLookupElement.append(strong);
+      newContactLookupElement.append(
+        document.createTextNode(". Choose the best match before saving.")
+      );
+    }
+    return;
+  }
+
+  if (currentStatus === ContactLookupStatus.NOT_FOUND) {
+    newContactLookupElement.classList.add("new-contact__lookup--warning");
+    newContactLookupElement.textContent =
+      currentMessage || "No existing account found. We'll add them as a private contact.";
+    return;
+  }
+
+  if (currentStatus === ContactLookupStatus.ERROR) {
+    newContactLookupElement.classList.add("new-contact__lookup--error");
+    newContactLookupElement.textContent =
+      currentMessage || "We couldn't verify this account. You can still add them manually.";
+    return;
+  }
+
+  const idleMessage =
+    currentMessage || "Search by nickname or email to see if they already have an account.";
+  newContactLookupElement.textContent = idleMessage;
+}
+
+function resetContactLookup({ message } = {}) {
+  contactLookupRequestId += 1;
+  clearContactLookupTimer();
+  setContactLookupState({ status: ContactLookupStatus.IDLE, results: [], message });
+}
+
+function scheduleContactLookup(query) {
+  const trimmed = query.trim();
+  contactLookupRequestId += 1;
+  clearContactLookupTimer();
+
+  if (!trimmed) {
+    resetContactLookup();
+    return;
+  }
+
+  if (trimmed.length < 2) {
+    resetContactLookup({ message: "Type at least two characters to search." });
+    return;
+  }
+
+  setContactLookupState({ status: ContactLookupStatus.SEARCHING, results: [] });
+  contactLookupTimer = window.setTimeout(() => {
+    performContactLookup(trimmed, contactLookupRequestId);
+  }, CONTACT_LOOKUP_DEBOUNCE_MS);
+}
+
+async function performContactLookup(query, requestId) {
+  clearContactLookupTimer();
+  try {
+    const payload = await apiRequest(`/api/users/search?query=${encodeURIComponent(query)}`);
+    if (requestId !== contactLookupRequestId) {
+      return;
+    }
+    const results = Array.isArray(payload?.results)
+      ? payload.results
+          .filter((entry) => entry && typeof entry.username === "string" && entry.username.trim())
+          .map((entry) => ({
+            id: entry.id,
+            username: entry.username.trim(),
+          }))
+      : [];
+    if (results.length) {
+      setContactLookupState({ status: ContactLookupStatus.FOUND, results });
+    } else {
+      setContactLookupState({ status: ContactLookupStatus.NOT_FOUND, results: [] });
+    }
+  } catch (error) {
+    if (requestId !== contactLookupRequestId) {
+      return;
+    }
+    const message =
+      error instanceof Error ? error.message : "We couldn't verify this account. Please try again.";
+    setContactLookupState({ status: ContactLookupStatus.ERROR, message });
+  }
+}
+
+function refreshContactLookupForMethod() {
+  const method = getActiveNewContactMethod();
+  if (method === ContactMethod.NICKNAME) {
+    const query = newContactNicknameInput?.value ?? "";
+    if (query.trim()) {
+      scheduleContactLookup(query);
+    } else {
+      resetContactLookup();
+    }
+    return;
+  }
+
+  if (method === ContactMethod.EMAIL) {
+    const query = newContactEmailInput?.value ?? "";
+    if (query.trim()) {
+      scheduleContactLookup(query);
+    } else {
+      resetContactLookup();
+    }
+    return;
+  }
+
+  resetContactLookup({
+    message: "Account lookup is available when adding by nickname or email.",
+  });
+}
+
+function handleContactLookupInput() {
+  const method = getActiveNewContactMethod();
+  if (method === ContactMethod.NICKNAME) {
+    scheduleContactLookup(newContactNicknameInput?.value ?? "");
+  } else if (method === ContactMethod.EMAIL) {
+    scheduleContactLookup(newContactEmailInput?.value ?? "");
+  }
+}
+
+function renderNewChatContacts(query = newChatSearchInput?.value ?? "") {
+  if (!newChatContactListElement) return;
+
+  const rawQuery = typeof query === "string" ? query.trim() : "";
+  const normalizedQuery = rawQuery.toLowerCase();
+  const available = sortContacts(contacts);
+  const filtered = normalizedQuery
+    ? available.filter((contact) => contactMatchesQuery(contact, normalizedQuery))
+    : available;
+
+  newChatContactListElement.innerHTML = "";
+
+  if (!filtered.length) {
+    if (newChatEmptyElement) {
+      newChatEmptyElement.hidden = false;
+      const heading = newChatEmptyElement.querySelector("strong");
+      const copy = newChatEmptyElement.querySelector("p");
+      if (heading) {
+        heading.textContent = normalizedQuery ? "No matches found" : "No saved contacts yet";
+      }
+      if (copy) {
+        copy.textContent = normalizedQuery
+          ? "Try searching by a different name, email, or phone number."
+          : "Add a new contact to start your first conversation.";
+      }
+    }
+    return;
+  }
+
+  if (newChatEmptyElement) {
+    newChatEmptyElement.hidden = true;
+  }
+
+  filtered.forEach((contact) => {
+    const normalized = normalizeContact(contact);
+    if (!normalized) return;
+
+    const listItem = document.createElement("li");
+    listItem.className = "new-chat__list-item";
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "new-chat__contact";
+    button.setAttribute("role", "option");
+    const key = getContactKey(normalized);
+    if (key) {
+      button.dataset.contactId = key;
+    }
+    if (normalized.lookupKey) {
+      button.dataset.contactLookup = normalized.lookupKey;
+    }
+
+    const avatar = document.createElement("span");
+    avatar.className = "new-chat__contact-avatar";
+    const avatarSource =
+      normalized.displayName ||
+      normalized.nickname ||
+      normalized.email ||
+      normalized.phoneDisplay ||
+      normalized.phone ||
+      "?";
+    avatar.textContent = getInitials(avatarSource);
+
+    const details = document.createElement("span");
+    details.className = "new-chat__contact-details";
+
+    const nameNode = document.createElement("span");
+    nameNode.className = "new-chat__contact-name";
+    const nameText =
+      normalized.displayName ||
+      normalized.nickname ||
+      normalized.email ||
+      normalized.phoneDisplay ||
+      normalized.phone ||
+      "Contact";
+    nameNode.appendChild(createHighlightedFragment(nameText, rawQuery));
+
+    const metaNode = document.createElement("span");
+    metaNode.className = "new-chat__contact-meta";
+    const metaSource =
+      normalized.email ||
+      normalized.phoneDisplay ||
+      (normalized.nickname && normalized.nickname !== nameText ? normalized.nickname : "") ||
+      getContactPreviewText(normalized) ||
+      deriveContactStatus(normalized);
+    if (metaSource) {
+      metaNode.appendChild(createHighlightedFragment(metaSource, rawQuery));
+    } else {
+      metaNode.textContent = "Ready to chat";
+    }
+
+    details.appendChild(nameNode);
+    details.appendChild(metaNode);
+
+    const action = document.createElement("span");
+    action.className = "new-chat__contact-action";
+    action.setAttribute("aria-hidden", "true");
+    action.textContent = "→";
+
+    button.appendChild(avatar);
+    button.appendChild(details);
+    button.appendChild(action);
+    button.setAttribute("aria-label", `Start chat with ${nameText}`);
+
+    listItem.appendChild(button);
+    newChatContactListElement.appendChild(listItem);
+  });
+}
+
+function showNewChatView(view, { focus = true } = {}) {
+  if (!newContactModal) return;
+  const mode = view === "form" ? "form" : "list";
+  newContactModal.dataset.view = mode;
+
+  if (newChatListView) {
+    newChatListView.hidden = mode !== "list";
+  }
+  if (newContactForm) {
+    newContactForm.hidden = mode !== "form";
+  }
+  if (newContactBackButton) {
+    newContactBackButton.hidden = mode !== "form";
+  }
+
+  if (!focus) {
+    return;
+  }
+
+  if (mode === "list") {
+    if (newChatSearchInput instanceof HTMLElement) {
+      newChatSearchInput.focus();
+    }
+    return;
+  }
+
+  const activeGroup = newContactFieldGroups.find(
+    (group) => group.dataset.contactFields === getActiveNewContactMethod()
+  );
+  const focusTarget = activeGroup
+    ? activeGroup.querySelector("input:not([type=\"radio\"]):not([disabled]), textarea:not([disabled])")
+    : newContactForm.querySelector(
+        "input:not([type=\"radio\"]):not([disabled]), textarea:not([disabled])"
+      );
+  if (focusTarget instanceof HTMLElement) {
+    focusTarget.focus();
+  }
+}
+
+function handleNewChatSearch(event) {
+  const value = typeof event.target.value === "string" ? event.target.value : "";
+  renderNewChatContacts(value);
+}
+
+function findStoredContactByButton(target) {
+  const contactId = target.dataset.contactId ?? "";
+  const lookup = target.dataset.contactLookup ?? "";
+  if (contactId) {
+    const match = contacts.find((candidate) => getContactKey(candidate) === contactId);
+    if (match) return match;
+  }
+  if (lookup) {
+    const match = contacts.find((candidate) => normalizeContact(candidate)?.lookupKey === lookup);
+    if (match) return match;
+  }
+  return null;
+}
+
+function handleNewChatContactClick(event) {
+  const button =
+    event.target instanceof HTMLElement
+      ? event.target.closest(".new-chat__contact")
+      : null;
+  if (!(button instanceof HTMLElement)) {
+    return;
+  }
+  event.preventDefault();
+
+  const storedContact = findStoredContactByButton(button);
+  const nameFallback =
+    button.querySelector(".new-chat__contact-name")?.textContent?.trim() ?? "";
+  const contact = storedContact ?? normalizeContact({ displayName: nameFallback }) ?? null;
+  if (!contact) return;
+
+  openChatForContact(contact, { showToastMessage: true });
+}
+
+function handleStartNewContact() {
+  showNewChatView("form");
+  setActiveContactMethod(ContactMethod.NICKNAME, { focus: true });
+  refreshContactLookupForMethod();
+}
+
+function openChatForContact(contact, { showToastMessage = true } = {}) {
+  const normalized = normalizeContact(contact);
+  if (!normalized) return null;
+
+  const existing = chats.find(
+    (chat) => chat.type === ChatType.DIRECT && chat.contact && contactsMatch(chat.contact, normalized)
+  );
+
+  if (existing) {
+    openChat(existing.id);
+    closeNewContactModal();
+    if (showToastMessage) {
+      showToast(`You're chatting with ${existing.name}`);
+    }
+    return { chat: existing, created: false };
+  }
+
+  const status = deriveContactStatus(normalized);
+  const chat = createChat(normalized.displayName, { status, contact: normalized });
+  closeNewContactModal();
+  if (showToastMessage) {
+    showToast(`Started a chat with ${chat.name}`);
+  }
+  return { chat, created: true };
+}
+
 function openNewContactModal() {
   if (!newContactModal || !newContactForm) return;
   if (!newContactModal.hidden) return;
@@ -4058,10 +4750,18 @@ function openNewContactModal() {
     document.activeElement instanceof HTMLElement ? document.activeElement : newChatButton;
 
   resetNewContactForm();
-  setActiveContactMethod(getActiveNewContactMethod(), { focus: true });
+  showNewChatView("list", { focus: false });
+  if (newChatSearchInput) {
+    newChatSearchInput.value = "";
+  }
+  renderNewChatContacts();
 
   newContactModal.hidden = false;
   document.body.classList.add("modal-open");
+
+  if (newChatSearchInput instanceof HTMLElement) {
+    newChatSearchInput.focus();
+  }
 }
 
 function closeNewContactModal({ restoreFocus = true } = {}) {
@@ -4069,6 +4769,9 @@ function closeNewContactModal({ restoreFocus = true } = {}) {
   if (newContactModal.hidden) return;
 
   newContactModal.hidden = true;
+  showNewChatView("list", { focus: false });
+  resetContactLookup();
+  clearContactLookupTimer();
   if (
     (!profileModal || profileModal.hidden) &&
     (!settingsModal || settingsModal.hidden)
@@ -4147,11 +4850,17 @@ function handleNewContactSubmit(event) {
     return;
   }
 
-  const status = deriveContactStatus(contact);
-  const chat = createChat(contact.displayName, { status, contact });
+  const { contact: storedContact } = upsertContact(contact);
   const methodLabel = getContactMethodLabel(contact.method);
-  showToast(`Started a chat with ${chat.name} via ${methodLabel}`);
-  closeNewContactModal();
+  const result = openChatForContact(storedContact ?? contact, { showToastMessage: false });
+  if (result?.chat) {
+    const toastMessage = result.created
+      ? `Started a chat with ${result.chat.name} via ${methodLabel}`
+      : `You're chatting with ${result.chat.name}`;
+    showToast(toastMessage);
+  } else if (storedContact) {
+    showToast(`Saved ${storedContact.displayName} to contacts`);
+  }
 }
 
 function handleNewChat() {
@@ -4642,6 +5351,12 @@ function hydrate() {
     newContactForm.addEventListener("submit", handleNewContactSubmit);
     newContactForm.addEventListener("input", () => updateNewContactPreview());
   }
+  if (newContactNicknameInput) {
+    newContactNicknameInput.addEventListener("input", handleContactLookupInput);
+  }
+  if (newContactEmailInput) {
+    newContactEmailInput.addEventListener("input", handleContactLookupInput);
+  }
   newContactMethodInputs.forEach((input) => {
     input.addEventListener("change", (event) => {
       const target = event.target;
@@ -4651,10 +5366,23 @@ function hydrate() {
     });
   });
   if (newContactCancelButton) {
-    newContactCancelButton.addEventListener("click", () => closeNewContactModal());
+    newContactCancelButton.addEventListener("click", () => {
+      showNewChatView("list");
+      if (newChatSearchInput instanceof HTMLElement) {
+        newChatSearchInput.focus();
+      }
+    });
   }
   if (newContactCloseButton) {
     newContactCloseButton.addEventListener("click", () => closeNewContactModal());
+  }
+  if (newContactBackButton) {
+    newContactBackButton.addEventListener("click", () => {
+      showNewChatView("list");
+      if (newChatSearchInput instanceof HTMLElement) {
+        newChatSearchInput.focus();
+      }
+    });
   }
   if (newContactModal) {
     newContactModal.addEventListener("click", (event) => {
@@ -4664,6 +5392,15 @@ function hydrate() {
       }
     });
     newContactModal.addEventListener("keydown", trapNewContactFocus);
+  }
+  if (newChatAddContactButton) {
+    newChatAddContactButton.addEventListener("click", handleStartNewContact);
+  }
+  if (newChatSearchInput) {
+    newChatSearchInput.addEventListener("input", handleNewChatSearch);
+  }
+  if (newChatContactListElement) {
+    newChatContactListElement.addEventListener("click", handleNewChatContactClick);
   }
   setActiveContactMethod(getActiveNewContactMethod());
 
@@ -4853,14 +5590,29 @@ function hydrate() {
 
   window.addEventListener("storage", (event) => {
     if (event.key !== AUTH_STORAGE_KEY) return;
-    authState = loadAuthState();
+
+    const parseAuthValue = (raw) => {
+      if (typeof raw !== "string" || !raw) return null;
+      try {
+        const parsed = JSON.parse(raw);
+        return normalizeAuthState(parsed);
+      } catch (error) {
+        return null;
+      }
+    };
+
+    const nextAuth = parseAuthValue(event.newValue);
+    const previousAuth = parseAuthValue(event.oldValue);
+    authState = nextAuth;
+
     if (authState) {
       applyAuthenticatedUserToProfile(authState);
+      reloadStateForActiveUser({ preserveChat: false });
       updateAuthUI();
       return;
     }
 
-    resetAppDataToDefaults();
+    resetAppDataToDefaults({ auth: previousAuth });
     setActiveAuthView(AuthView.LOGIN);
     updateAuthUI();
   });
