@@ -156,9 +156,16 @@ const API_BASE_URL = (() => {
   if (window.location.protocol === "file:" || window.location.origin === "null") {
     return "http://localhost:3001";
   }
-  if (window.location.hostname === "localhost" && window.location.port === "3000") {
-    return "http://localhost:3001";
+
+  const { hostname, port, protocol } = window.location;
+  const localhostAliases = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1"]);
+  if (localhostAliases.has(hostname) && port === "3000") {
+    const backendHost = hostname === "0.0.0.0" ? "127.0.0.1" : hostname;
+    const normalizedHost = backendHost.includes(":") ? `[${backendHost}]` : backendHost;
+    const scheme = protocol === "https:" ? "https" : "http";
+    return `${scheme}://${normalizedHost}:3001`;
   }
+
   return window.location.origin.replace(/\/+$/, "");
 })();
 const MAX_COMPOSER_ATTACHMENTS = 6;
