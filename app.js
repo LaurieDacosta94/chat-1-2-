@@ -260,6 +260,12 @@ const MessageStatus = {
   READ: "read",
 };
 
+const ToastIntent = {
+  INFO: "info",
+  SUCCESS: "success",
+  ERROR: "error",
+};
+
 const realtimeState = {
   socket: null,
   isAuthenticated: false,
@@ -403,7 +409,6 @@ const Filter = {
   ARCHIVED: "archived",
 };
 
-const messageStatusTimers = new Map();
 const EMOJI_CHARACTERS = [
   "😀",
   "😁",
@@ -1305,7 +1310,7 @@ function normalizeMessage(message) {
 
   if (normalized.direction === "outgoing") {
     if (!Object.values(MessageStatus).includes(normalized.status)) {
-      normalized.status = MessageStatus.READ;
+      normalized.status = MessageStatus.SENT;
     }
   } else if (normalized.status) {
     delete normalized.status;
@@ -1349,6 +1354,11 @@ function normalizeChat(chat) {
     typeof chat.name === "string" && chat.name.trim()
       ? chat.name.trim()
       : normalizedContact?.displayName ?? "New chat";
+
+  const unreadCount =
+    Number.isFinite(chat.unreadCount) && chat.unreadCount > 0
+      ? Math.min(Math.floor(chat.unreadCount), 999)
+      : 0;
 
   const capabilities = {
     audio:
@@ -1394,6 +1404,7 @@ function normalizeChat(chat) {
     ...(normalizedContact && normalizedType !== ChatType.GROUP
       ? { contact: normalizedContact }
       : {}),
+    unreadCount,
   };
 }
 
@@ -2151,7 +2162,11 @@ function handleRealtimeAuthError(payload) {
 
   const normalized = message.toLowerCase();
   if (normalized.includes("invalid token") || normalized.includes("missing token") || normalized.includes("token expired")) {
-    showToast("Session expired. Please sign in again.");
+    showToast({
+      message: "Session expired. Please sign in again.",
+      intent: ToastIntent.ERROR,
+      duration: 4000,
+    });
     disconnectRealtime({ keepSocket: true });
     setAuthState(null);
     return;
@@ -2172,7 +2187,7 @@ function handleRealtimeChatHistory(payload) {
   }
   realtimeState.joinedChats.add(chatId);
   const messages = Array.isArray(payload.messages) ? payload.messages : [];
-  applyServerMessages(chatId, messages, { replaceExisting: true });
+  applyServerMessages(chatId, messages, { replaceExisting: true, origin: "history" });
 }
 
 function handleRealtimeMessage(payload) {
@@ -2183,7 +2198,31 @@ function handleRealtimeMessage(payload) {
   if (!chatId) {
     return;
   }
-  applyServerMessages(chatId, [payload]);
+  applyServerMessages(chatId, [payload], { origin: "realtime" });
+}
+
+function handleRealtimeMessageError(payload) {
+  const message =
+    typeof payload?.error === "string" && payload.error.trim()
+      ? payload.error.trim()
+      : "Failed to send message.";
+  showToast({
+    message,
+    intent: ToastIntent.ERROR,
+    duration: 4000,
+  });
+}
+
+function handleRealtimeChatError(payload) {
+  const message =
+    typeof payload?.error === "string" && payload.error.trim()
+      ? payload.error.trim()
+      : "Unable to load chat conversation.";
+  showToast({
+    message,
+    intent: ToastIntent.ERROR,
+    duration: 4000,
+  });
 }
 
 function handleRealtimeDisconnect() {
@@ -2222,6 +2261,8 @@ function ensureRealtimeSocket() {
     socket.on("authError", handleRealtimeAuthError);
     socket.on("chatHistory", handleRealtimeChatHistory);
     socket.on("message", handleRealtimeMessage);
+    socket.on("messageError", handleRealtimeMessageError);
+    socket.on("chatError", handleRealtimeChatError);
     socket.on("disconnect", handleRealtimeDisconnect);
     socket.on("connect_error", handleRealtimeConnectError);
     return socket;
@@ -2491,7 +2532,7 @@ function applyIncomingContactMetadata(chat, payload) {
   return true;
 }
 
-function applyServerMessages(chatId, serverPayloads, { replaceExisting = false } = {}) {
+function applyServerMessages(chatId, serverPayloads, { replaceExisting = false, origin = "realtime" } = {}) {
   const normalizedChatId = normalizeChatIdentifier(chatId);
   if (!normalizedChatId) {
     return;
@@ -2507,6 +2548,10 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false }
 
   const serverMessageIds = getServerMessageSet(normalizedChatId);
   let mutated = false;
+  const isRealtime = origin !== "history";
+  // Suppress toast notifications when hydrating historical conversations so we only
+  // surface alerts for real-time activity.
+  const notifications = [];
 
   if (replaceExisting) {
     if (chat.messages && chat.messages.some((message) => message && message.serverId)) {
@@ -2562,6 +2607,18 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false }
           }
           realtimeState.pendingOutgoing.delete(normalizedMessage.clientId);
           mutated = true;
+          if (isRealtime && normalizedMessage.direction === "outgoing") {
+            const chatName = getChatDisplayName(chat);
+            const preview = buildToastPreviewFromMessage(existing);
+            notifications.push({
+              message: buildToastCopy({
+                prefix: "Message sent to",
+                chatName,
+                preview,
+              }),
+              intent: ToastIntent.SUCCESS,
+            });
+          }
           return;
         }
       }
@@ -2579,6 +2636,46 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false }
     if (normalizedMessage.clientId) {
       realtimeState.pendingOutgoing.delete(normalizedMessage.clientId);
     }
+    if (isRealtime && normalizedMessage.direction === "incoming") {
+      if (!isChatInFocus(chat)) {
+        const previousUnread = Number.isFinite(chat.unreadCount) ? chat.unreadCount : 0;
+        const nextUnread = Math.min(previousUnread + 1, 999);
+        if (nextUnread !== previousUnread) {
+          chat.unreadCount = nextUnread;
+          mutated = true;
+        }
+      } else if (chat.unreadCount) {
+        chat.unreadCount = 0;
+        mutated = true;
+      }
+    }
+    if (isRealtime) {
+      if (normalizedMessage.direction === "incoming") {
+        if (shouldNotifyIncomingMessage(chat)) {
+          const chatName = getChatDisplayName(chat);
+          const preview = buildToastPreviewFromMessage(messageToInsert);
+          notifications.push({
+            message: buildToastCopy({
+              prefix: "New message from",
+              chatName,
+              preview,
+            }),
+            intent: ToastIntent.INFO,
+          });
+        }
+      } else if (normalizedMessage.direction === "outgoing") {
+        const chatName = getChatDisplayName(chat);
+        const preview = buildToastPreviewFromMessage(messageToInsert);
+        notifications.push({
+          message: buildToastCopy({
+            prefix: "Message sent to",
+            chatName,
+            preview,
+          }),
+          intent: ToastIntent.SUCCESS,
+        });
+      }
+    }
     mutated = true;
   });
 
@@ -2589,6 +2686,10 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false }
     if (activeChatId === normalizedChatId) {
       renderChatView(chat);
     }
+  }
+
+  if (isRealtime && notifications.length) {
+    notifications.forEach((notification) => showToast(notification));
   }
 }
 
@@ -3170,84 +3271,39 @@ function setWallpaper(wallpaper) {
   }
 }
 
-function clearMessageStatusTimers(messageId) {
-  const timers = messageStatusTimers.get(messageId);
-  if (!timers) return;
-  timers.forEach((timerId) => clearTimeout(timerId));
-  messageStatusTimers.delete(messageId);
-}
-
-function updateMessageStatus(chatId, messageId, nextStatus) {
-  if (!Object.values(MessageStatus).includes(nextStatus)) return;
-  const chat = chats.find((c) => c.id === chatId);
-  if (!chat) return;
-  const message = chat.messages.find((m) => m.id === messageId);
-  if (!message || message.direction !== "outgoing") return;
-  if (message.status === nextStatus) return;
-
-  message.status = nextStatus;
-  saveState(chats);
-  renderChats(chatSearchInput.value);
-  if (chat.id === activeChatId) {
-    renderChatView(chat);
-  }
-
-  if (nextStatus === MessageStatus.READ) {
-    clearMessageStatusTimers(messageId);
-  }
-}
-
-function scheduleMessageStatus(chatId, messageId, currentStatus = MessageStatus.SENT) {
-  clearMessageStatusTimers(messageId);
-
-  const timers = [];
-  const randomWithin = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
-
-  if (currentStatus === MessageStatus.SENT) {
-    const deliveredDelay = randomWithin(700, 1300);
-    const readDelay = deliveredDelay + randomWithin(900, 1700);
-    timers.push(
-      setTimeout(() => updateMessageStatus(chatId, messageId, MessageStatus.DELIVERED), deliveredDelay)
-    );
-    timers.push(
-      setTimeout(() => updateMessageStatus(chatId, messageId, MessageStatus.READ), readDelay)
-    );
-  } else if (currentStatus === MessageStatus.DELIVERED) {
-    const readDelay = randomWithin(900, 1700);
-    timers.push(
-      setTimeout(() => updateMessageStatus(chatId, messageId, MessageStatus.READ), readDelay)
-    );
-  }
-
-  if (timers.length) {
-    messageStatusTimers.set(messageId, timers);
-  }
-}
-
-function resetMessageStatusTimers() {
-  Array.from(messageStatusTimers.values()).forEach((timers) => {
-    timers.forEach((timerId) => clearTimeout(timerId));
-  });
-  messageStatusTimers.clear();
-}
-
 function resumePendingStatuses() {
-  resetMessageStatusTimers();
   let mutated = false;
+  const validStatuses = Object.values(MessageStatus);
   chats.forEach((chat) => {
     chat.messages.forEach((message) => {
       if (message.direction !== "outgoing") return;
-      if (!Object.values(MessageStatus).includes(message.status)) {
+      if (!validStatuses.includes(message.status)) {
         message.status = MessageStatus.SENT;
         mutated = true;
       }
-      if (message.status !== MessageStatus.READ) {
-        scheduleMessageStatus(chat.id, message.id, message.status);
-      }
     });
+    const normalizedUnread =
+      Number.isFinite(chat.unreadCount) && chat.unreadCount > 0
+        ? Math.min(Math.floor(chat.unreadCount), 999)
+        : 0;
+    if (chat.unreadCount !== normalizedUnread) {
+      chat.unreadCount = normalizedUnread;
+      mutated = true;
+    }
+    if (chat.id === activeChatId && isChatInFocus(chat) && chat.unreadCount) {
+      chat.unreadCount = 0;
+      mutated = true;
+    }
   });
   if (mutated) {
     saveState(chats);
+    renderChats(chatSearchInput.value);
+    if (activeChatId) {
+      const activeChat = getActiveChat();
+      if (activeChat) {
+        renderChatView(activeChat);
+      }
+    }
   }
 }
 
@@ -3561,6 +3617,7 @@ function renderChats(searchText = "") {
     const previewNode = chatNode.querySelector(".chat-item__preview");
     const metaNode = chatNode.querySelector(".chat-item__meta");
     const avatarNode = chatNode.querySelector(".chat-item__avatar");
+    const badgeNode = chatNode.querySelector(".chat-item__badge");
 
     nameNode.textContent = chat.name;
     avatarNode.textContent = chat.avatar ?? chat.name.slice(0, 1).toUpperCase();
@@ -3577,6 +3634,17 @@ function renderChats(searchText = "") {
 
     const lastMessage = chat.messages.at(-1);
     timestampNode.textContent = lastMessage ? formatMessageTimestamp(lastMessage) : "";
+    const unreadCount = Number.isFinite(chat.unreadCount) ? Math.max(0, chat.unreadCount) : 0;
+    if (badgeNode) {
+      if (unreadCount > 0) {
+        badgeNode.hidden = false;
+        badgeNode.textContent = unreadCount > 99 ? "99+" : String(unreadCount);
+      } else {
+        badgeNode.hidden = true;
+        badgeNode.textContent = "";
+      }
+    }
+    chatNode.classList.toggle("chat-item--unread", unreadCount > 0);
 
     const draftText = getDraft(chat.id)?.trim();
     const draftAttachments = getAttachmentDraft(chat.id);
@@ -4111,6 +4179,11 @@ function openChat(chatId) {
   activeChatId = chatId;
   pendingAttachments = getAttachmentDraft(chatId);
   const chat = getActiveChat();
+  let unreadCleared = false;
+  if (chat && chat.unreadCount) {
+    chat.unreadCount = 0;
+    unreadCleared = true;
+  }
   renderChats(chatSearchInput.value);
   if (isMessageSearchOpen) {
     shouldScrollToActiveSearchMatch = true;
@@ -4123,6 +4196,9 @@ function openChat(chatId) {
     focusMessageSearchInput();
   }
   maybeHideSidebar();
+  if (unreadCleared) {
+    saveState(chats);
+  }
 }
 
 function addMessageToChat(chatId, text, direction = "outgoing", attachments = []) {
@@ -4157,9 +4233,6 @@ function addMessageToChat(chatId, text, direction = "outgoing", attachments = []
   }
 
   saveState(chats);
-  if (isOutgoing) {
-    scheduleMessageStatus(chat.id, newMessage.id, newMessage.status);
-  }
   if (wasArchived && activeFilter === Filter.ARCHIVED) {
     setActiveFilter(Filter.ALL);
   } else {
@@ -4311,14 +4384,9 @@ function handleSend() {
   setDraft(chat.id, "");
   renderChats(chatSearchInput.value);
 
-  const toastMessage = wasArchived
-    ? "Conversation restored from archive"
-    : !hasText && attachmentsToSend.length > 1
-    ? "Attachments sent"
-    : !hasText && attachmentsToSend.length === 1
-    ? "Attachment sent"
-    : "Message sent";
-  showToast(toastMessage);
+  if (wasArchived) {
+    showToast("Conversation restored from archive");
+  }
 }
 
 function handleMessageInput(event) {
@@ -5855,7 +5923,133 @@ function autoResizeTextarea() {
   messageInput.style.height = `${messageInput.scrollHeight}px`;
 }
 
+const DEFAULT_TOAST_DURATION_MS = 2600;
+const TOAST_ICON_BY_INTENT = {
+  [ToastIntent.INFO]: "💬",
+  [ToastIntent.SUCCESS]: "✓",
+  [ToastIntent.ERROR]: "⚠️",
+};
+
 let toastTimeout = null;
+
+function getChatDisplayName(chat) {
+  if (!chat || typeof chat !== "object") {
+    return "Conversation";
+  }
+  if (typeof chat.name === "string" && chat.name.trim()) {
+    return chat.name.trim();
+  }
+  const contact = chat.contact ?? null;
+  if (contact && typeof contact === "object") {
+    if (typeof contact.displayName === "string" && contact.displayName.trim()) {
+      return contact.displayName.trim();
+    }
+    if (typeof contact.nickname === "string" && contact.nickname.trim()) {
+      return contact.nickname.trim();
+    }
+  }
+  return "Conversation";
+}
+
+function buildToastPreviewFromMessage(message) {
+  if (!message || typeof message !== "object") {
+    return "";
+  }
+  const text = typeof message.text === "string" ? message.text.trim() : "";
+  if (text) {
+    return text.length > 60 ? `${text.slice(0, 57)}…` : text;
+  }
+  const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+  if (!attachments.length) {
+    return "";
+  }
+  return formatAttachmentSummary(attachments);
+}
+
+function buildToastCopy({ prefix, chatName, preview }) {
+  const safeName = typeof chatName === "string" && chatName.trim() ? chatName.trim() : "Conversation";
+  if (preview) {
+    return `${prefix} ${safeName}: ${preview}`;
+  }
+  return `${prefix} ${safeName}`;
+}
+
+function isChatInFocus(chat) {
+  if (!chat) {
+    return false;
+  }
+  if (activeChatId !== chat.id) {
+    return false;
+  }
+  if (typeof document === "undefined") {
+    return true;
+  }
+  if (document.hidden) {
+    return false;
+  }
+  if (typeof document.hasFocus === "function") {
+    return document.hasFocus();
+  }
+  return true;
+}
+
+function shouldNotifyIncomingMessage(chat) {
+  // Avoid spamming toasts when the user is already reading the active chat.
+  if (!chat) {
+    return false;
+  }
+  return !isChatInFocus(chat);
+}
+
+function showToast(messageOrOptions, options = {}) {
+  const config =
+    typeof messageOrOptions === "string"
+      ? { message: messageOrOptions, ...options }
+      : { ...(messageOrOptions || {}), ...options };
+  const message = typeof config.message === "string" ? config.message.trim() : "";
+  if (!message) {
+    return;
+  }
+
+  const validIntents = Object.values(ToastIntent);
+  const intent = validIntents.includes(config.intent) ? config.intent : ToastIntent.INFO;
+  const duration =
+    Number.isFinite(config.duration) && config.duration > 0 ? config.duration : DEFAULT_TOAST_DURATION_MS;
+
+  let toast = document.querySelector(".toast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.className = "toast";
+    toast.setAttribute("role", "status");
+    toast.setAttribute("aria-live", "polite");
+    toast.innerHTML =
+      '<span class="toast__icon" aria-hidden="true"></span><span class="toast__message"></span>';
+    document.body.appendChild(toast);
+  }
+
+  const iconElement = toast.querySelector(".toast__icon");
+  const messageElement = toast.querySelector(".toast__message");
+  if (iconElement) {
+    iconElement.textContent = TOAST_ICON_BY_INTENT[intent] ?? TOAST_ICON_BY_INTENT[ToastIntent.INFO];
+  }
+  if (messageElement) {
+    messageElement.textContent = message;
+  } else {
+    toast.textContent = message;
+  }
+
+  toast.dataset.intent = intent;
+
+  toast.classList.remove("toast--visible");
+  void toast.offsetWidth;
+  toast.classList.add("toast--visible");
+
+  if (toastTimeout) clearTimeout(toastTimeout);
+  toastTimeout = setTimeout(() => {
+    toast.classList.remove("toast--visible");
+  }, duration);
+}
+
 let isEmojiPickerOpen = false;
 let emojiOutsideClickHandler = null;
 let isMessageSearchOpen = false;
@@ -5871,21 +6065,6 @@ let callTimerInterval = null;
 let callConnectionTimeout = null;
 let callPlanRestoreFocusTo = null;
 let callOverlayRestoreFocusTo = null;
-function showToast(message) {
-  let toast = document.querySelector(".toast");
-  if (!toast) {
-    toast = document.createElement("div");
-    toast.className = "toast";
-    document.body.appendChild(toast);
-  }
-  toast.textContent = message;
-  toast.classList.add("toast--visible");
-
-  if (toastTimeout) clearTimeout(toastTimeout);
-  toastTimeout = setTimeout(() => {
-    toast.classList.remove("toast--visible");
-  }, 2000);
-}
 
 function buildEmojiPicker() {
   if (!emojiPicker) return;
@@ -6433,6 +6612,11 @@ function hydrate() {
       resumePendingStatuses();
     }
   });
+  if (typeof window !== "undefined") {
+    window.addEventListener("focus", () => {
+      resumePendingStatuses();
+    });
+  }
 
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
