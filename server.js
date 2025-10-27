@@ -320,21 +320,45 @@ const io = new Server(server, {
   },
 });
 
-const userSocketMap = new Map(); // userId -> Set(socketId)
+// We normalize user identifiers to strings so that sockets looked up via
+// JWT payloads (numbers) and event payloads (often strings) refer to the same
+// entry. Without this, direct message delivery could fail because `Set`
+// lookups treat `1` and `'1'` as different keys.
+const userSocketMap = new Map(); // normalizedUserId -> Set(socketId)
+
+function normalizeUserId(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === 'string' && value.trim()) {
+    return value.trim();
+  }
+  return null;
+}
 
 function addSocketForUser(userId, socketId) {
-  if (!userSocketMap.has(userId)) {
-    userSocketMap.set(userId, new Set());
+  const normalizedUserId = normalizeUserId(userId);
+  if (!normalizedUserId) {
+    return;
   }
-  userSocketMap.get(userId).add(socketId);
+
+  if (!userSocketMap.has(normalizedUserId)) {
+    userSocketMap.set(normalizedUserId, new Set());
+  }
+  userSocketMap.get(normalizedUserId).add(socketId);
 }
 
 function removeSocketForUser(userId, socketId) {
-  const sockets = userSocketMap.get(userId);
+  const normalizedUserId = normalizeUserId(userId);
+  if (!normalizedUserId) {
+    return;
+  }
+
+  const sockets = userSocketMap.get(normalizedUserId);
   if (!sockets) return;
   sockets.delete(socketId);
   if (sockets.size === 0) {
-    userSocketMap.delete(userId);
+    userSocketMap.delete(normalizedUserId);
   }
 }
 
@@ -896,14 +920,25 @@ io.on('connection', (socket) => {
       const payload = { ...message, chat_id: chatId };
       io.to(chatId).emit('message', payload);
 
+      const normalizedSenderId = normalizeUserId(authenticatedUserId);
       const recipients = new Set();
       if (Array.isArray(recipientIds)) {
-        recipientIds.forEach((id) => recipients.add(id));
+        recipientIds.forEach((id) => {
+          const normalized = normalizeUserId(id);
+          if (normalized) {
+            recipients.add(normalized);
+          }
+        });
       }
-      if (recipientId) {
-        recipients.add(recipientId);
+      if (recipientId !== undefined) {
+        const normalized = normalizeUserId(recipientId);
+        if (normalized) {
+          recipients.add(normalized);
+        }
       }
-      recipients.delete(authenticatedUserId);
+      if (normalizedSenderId) {
+        recipients.delete(normalizedSenderId);
+      }
 
       recipients.forEach((userId) => {
         const sockets = userSocketMap.get(userId);
