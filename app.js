@@ -260,6 +260,12 @@ const MessageStatus = {
   READ: "read",
 };
 
+const ToastIntent = {
+  INFO: "info",
+  SUCCESS: "success",
+  ERROR: "error",
+};
+
 const realtimeState = {
   socket: null,
   isAuthenticated: false,
@@ -2151,7 +2157,11 @@ function handleRealtimeAuthError(payload) {
 
   const normalized = message.toLowerCase();
   if (normalized.includes("invalid token") || normalized.includes("missing token") || normalized.includes("token expired")) {
-    showToast("Session expired. Please sign in again.");
+    showToast({
+      message: "Session expired. Please sign in again.",
+      intent: ToastIntent.ERROR,
+      duration: 4000,
+    });
     disconnectRealtime({ keepSocket: true });
     setAuthState(null);
     return;
@@ -2172,7 +2182,7 @@ function handleRealtimeChatHistory(payload) {
   }
   realtimeState.joinedChats.add(chatId);
   const messages = Array.isArray(payload.messages) ? payload.messages : [];
-  applyServerMessages(chatId, messages, { replaceExisting: true });
+  applyServerMessages(chatId, messages, { replaceExisting: true, origin: "history" });
 }
 
 function handleRealtimeMessage(payload) {
@@ -2183,7 +2193,31 @@ function handleRealtimeMessage(payload) {
   if (!chatId) {
     return;
   }
-  applyServerMessages(chatId, [payload]);
+  applyServerMessages(chatId, [payload], { origin: "realtime" });
+}
+
+function handleRealtimeMessageError(payload) {
+  const message =
+    typeof payload?.error === "string" && payload.error.trim()
+      ? payload.error.trim()
+      : "Failed to send message.";
+  showToast({
+    message,
+    intent: ToastIntent.ERROR,
+    duration: 4000,
+  });
+}
+
+function handleRealtimeChatError(payload) {
+  const message =
+    typeof payload?.error === "string" && payload.error.trim()
+      ? payload.error.trim()
+      : "Unable to load chat conversation.";
+  showToast({
+    message,
+    intent: ToastIntent.ERROR,
+    duration: 4000,
+  });
 }
 
 function handleRealtimeDisconnect() {
@@ -2222,6 +2256,8 @@ function ensureRealtimeSocket() {
     socket.on("authError", handleRealtimeAuthError);
     socket.on("chatHistory", handleRealtimeChatHistory);
     socket.on("message", handleRealtimeMessage);
+    socket.on("messageError", handleRealtimeMessageError);
+    socket.on("chatError", handleRealtimeChatError);
     socket.on("disconnect", handleRealtimeDisconnect);
     socket.on("connect_error", handleRealtimeConnectError);
     return socket;
@@ -2491,7 +2527,7 @@ function applyIncomingContactMetadata(chat, payload) {
   return true;
 }
 
-function applyServerMessages(chatId, serverPayloads, { replaceExisting = false } = {}) {
+function applyServerMessages(chatId, serverPayloads, { replaceExisting = false, origin = "realtime" } = {}) {
   const normalizedChatId = normalizeChatIdentifier(chatId);
   if (!normalizedChatId) {
     return;
@@ -2507,6 +2543,10 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false }
 
   const serverMessageIds = getServerMessageSet(normalizedChatId);
   let mutated = false;
+  const isRealtime = origin !== "history";
+  // Suppress toast notifications when hydrating historical conversations so we only
+  // surface alerts for real-time activity.
+  const notifications = [];
 
   if (replaceExisting) {
     if (chat.messages && chat.messages.some((message) => message && message.serverId)) {
@@ -2562,6 +2602,18 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false }
           }
           realtimeState.pendingOutgoing.delete(normalizedMessage.clientId);
           mutated = true;
+          if (isRealtime && normalizedMessage.direction === "outgoing") {
+            const chatName = getChatDisplayName(chat);
+            const preview = buildToastPreviewFromMessage(existing);
+            notifications.push({
+              message: buildToastCopy({
+                prefix: "Message sent to",
+                chatName,
+                preview,
+              }),
+              intent: ToastIntent.SUCCESS,
+            });
+          }
           return;
         }
       }
@@ -2579,6 +2631,33 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false }
     if (normalizedMessage.clientId) {
       realtimeState.pendingOutgoing.delete(normalizedMessage.clientId);
     }
+    if (isRealtime) {
+      if (normalizedMessage.direction === "incoming") {
+        if (shouldNotifyIncomingMessage(chat)) {
+          const chatName = getChatDisplayName(chat);
+          const preview = buildToastPreviewFromMessage(messageToInsert);
+          notifications.push({
+            message: buildToastCopy({
+              prefix: "New message from",
+              chatName,
+              preview,
+            }),
+            intent: ToastIntent.INFO,
+          });
+        }
+      } else if (normalizedMessage.direction === "outgoing") {
+        const chatName = getChatDisplayName(chat);
+        const preview = buildToastPreviewFromMessage(messageToInsert);
+        notifications.push({
+          message: buildToastCopy({
+            prefix: "Message sent to",
+            chatName,
+            preview,
+          }),
+          intent: ToastIntent.SUCCESS,
+        });
+      }
+    }
     mutated = true;
   });
 
@@ -2589,6 +2668,10 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false }
     if (activeChatId === normalizedChatId) {
       renderChatView(chat);
     }
+  }
+
+  if (isRealtime && notifications.length) {
+    notifications.forEach((notification) => showToast(notification));
   }
 }
 
@@ -4311,14 +4394,9 @@ function handleSend() {
   setDraft(chat.id, "");
   renderChats(chatSearchInput.value);
 
-  const toastMessage = wasArchived
-    ? "Conversation restored from archive"
-    : !hasText && attachmentsToSend.length > 1
-    ? "Attachments sent"
-    : !hasText && attachmentsToSend.length === 1
-    ? "Attachment sent"
-    : "Message sent";
-  showToast(toastMessage);
+  if (wasArchived) {
+    showToast("Conversation restored from archive");
+  }
 }
 
 function handleMessageInput(event) {
@@ -5855,7 +5933,127 @@ function autoResizeTextarea() {
   messageInput.style.height = `${messageInput.scrollHeight}px`;
 }
 
+const DEFAULT_TOAST_DURATION_MS = 2600;
+const TOAST_ICON_BY_INTENT = {
+  [ToastIntent.INFO]: "💬",
+  [ToastIntent.SUCCESS]: "✓",
+  [ToastIntent.ERROR]: "⚠️",
+};
+
 let toastTimeout = null;
+
+function getChatDisplayName(chat) {
+  if (!chat || typeof chat !== "object") {
+    return "Conversation";
+  }
+  if (typeof chat.name === "string" && chat.name.trim()) {
+    return chat.name.trim();
+  }
+  const contact = chat.contact ?? null;
+  if (contact && typeof contact === "object") {
+    if (typeof contact.displayName === "string" && contact.displayName.trim()) {
+      return contact.displayName.trim();
+    }
+    if (typeof contact.nickname === "string" && contact.nickname.trim()) {
+      return contact.nickname.trim();
+    }
+  }
+  return "Conversation";
+}
+
+function buildToastPreviewFromMessage(message) {
+  if (!message || typeof message !== "object") {
+    return "";
+  }
+  const text = typeof message.text === "string" ? message.text.trim() : "";
+  if (text) {
+    return text.length > 60 ? `${text.slice(0, 57)}…` : text;
+  }
+  const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+  if (!attachments.length) {
+    return "";
+  }
+  return formatAttachmentSummary(attachments);
+}
+
+function buildToastCopy({ prefix, chatName, preview }) {
+  const safeName = typeof chatName === "string" && chatName.trim() ? chatName.trim() : "Conversation";
+  if (preview) {
+    return `${prefix} ${safeName}: ${preview}`;
+  }
+  return `${prefix} ${safeName}`;
+}
+
+function shouldNotifyIncomingMessage(chat) {
+  // Avoid spamming toasts when the user is already reading the active chat unless the
+  // window is unfocused/hidden.
+  if (!chat) {
+    return false;
+  }
+  if (activeChatId !== chat.id) {
+    return true;
+  }
+  if (typeof document === "undefined") {
+    return false;
+  }
+  if (document.hidden) {
+    return true;
+  }
+  if (typeof document.hasFocus === "function") {
+    return !document.hasFocus();
+  }
+  return false;
+}
+
+function showToast(messageOrOptions, options = {}) {
+  const config =
+    typeof messageOrOptions === "string"
+      ? { message: messageOrOptions, ...options }
+      : { ...(messageOrOptions || {}), ...options };
+  const message = typeof config.message === "string" ? config.message.trim() : "";
+  if (!message) {
+    return;
+  }
+
+  const validIntents = Object.values(ToastIntent);
+  const intent = validIntents.includes(config.intent) ? config.intent : ToastIntent.INFO;
+  const duration =
+    Number.isFinite(config.duration) && config.duration > 0 ? config.duration : DEFAULT_TOAST_DURATION_MS;
+
+  let toast = document.querySelector(".toast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.className = "toast";
+    toast.setAttribute("role", "status");
+    toast.setAttribute("aria-live", "polite");
+    toast.innerHTML =
+      '<span class="toast__icon" aria-hidden="true"></span><span class="toast__message"></span>';
+    document.body.appendChild(toast);
+  }
+
+  const iconElement = toast.querySelector(".toast__icon");
+  const messageElement = toast.querySelector(".toast__message");
+  if (iconElement) {
+    iconElement.textContent = TOAST_ICON_BY_INTENT[intent] ?? TOAST_ICON_BY_INTENT[ToastIntent.INFO];
+  }
+  if (messageElement) {
+    messageElement.textContent = message;
+  } else {
+    toast.textContent = message;
+  }
+
+  toast.dataset.intent = intent;
+
+  toast.classList.remove("toast--visible");
+  void toast.offsetWidth;
+  toast.classList.add("toast--visible");
+
+  if (toastTimeout) clearTimeout(toastTimeout);
+  toastTimeout = setTimeout(() => {
+    toast.classList.remove("toast--visible");
+  }, duration);
+}
+
 let isEmojiPickerOpen = false;
 let emojiOutsideClickHandler = null;
 let isMessageSearchOpen = false;
@@ -5871,21 +6069,6 @@ let callTimerInterval = null;
 let callConnectionTimeout = null;
 let callPlanRestoreFocusTo = null;
 let callOverlayRestoreFocusTo = null;
-function showToast(message) {
-  let toast = document.querySelector(".toast");
-  if (!toast) {
-    toast = document.createElement("div");
-    toast.className = "toast";
-    document.body.appendChild(toast);
-  }
-  toast.textContent = message;
-  toast.classList.add("toast--visible");
-
-  if (toastTimeout) clearTimeout(toastTimeout);
-  toastTimeout = setTimeout(() => {
-    toast.classList.remove("toast--visible");
-  }, 2000);
-}
 
 function buildEmojiPicker() {
   if (!emojiPicker) return;

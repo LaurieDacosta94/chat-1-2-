@@ -14,6 +14,12 @@
   --text-muted: #667781;
   --toast-background: rgba(32, 44, 51, 0.95);
   --toast-text: var(--text-primary);
+  --toast-info-background: var(--toast-background);
+  --toast-info-text: var(--toast-text);
+  --toast-success-background: rgba(20, 94, 67, 0.95);
+  --toast-success-text: #e9edef;
+  --toast-error-background: rgba(176, 52, 52, 0.95);
+  --toast-error-text: #fde7e7;
   --composer-background: rgba(17, 27, 33, 0.9);
   --composer-input-background: rgba(255, 255, 255, 0.1);
   --attachment-surface: rgba(255, 255, 255, 0.08);
@@ -52,6 +58,12 @@
   --text-muted: #667781;
   --toast-background: rgba(17, 27, 33, 0.95);
   --toast-text: #e9edef;
+  --toast-info-background: var(--toast-background);
+  --toast-info-text: var(--toast-text);
+  --toast-success-background: rgba(0, 128, 105, 0.95);
+  --toast-success-text: #ffffff;
+  --toast-error-background: rgba(200, 54, 60, 0.95);
+  --toast-error-text: #ffffff;
   --composer-background: rgba(255, 255, 255, 0.92);
   --composer-input-background: rgba(0, 0, 0, 0.05);
   --attachment-surface: rgba(17, 27, 33, 0.08);
@@ -2475,26 +2487,58 @@ body.modal-open {
   position: fixed;
   bottom: 1.5rem;
   right: 1.5rem;
-  padding: 0.75rem 1rem;
-  background-color: var(--toast-background);
-  color: var(--toast-text);
-  border-radius: 0.5rem;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
-  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.85rem 1.1rem;
+  min-width: 220px;
+  max-width: min(360px, calc(100% - 3rem));
+  background-color: var(--toast-info-background);
+  color: var(--toast-info-text);
+  border-radius: 0.75rem;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  font-size: 0.95rem;
+  line-height: 1.35;
   opacity: 0;
-  transform: translateY(10px);
+  transform: translate3d(0, 12px, 0);
   transition: opacity 0.25s ease, transform 0.25s ease;
+  pointer-events: none;
+  z-index: 1000;
+}
+
+.toast[data-intent="success"] {
+  background-color: var(--toast-success-background);
+  color: var(--toast-success-text);
+}
+
+.toast[data-intent="error"] {
+  background-color: var(--toast-error-background);
+  color: var(--toast-error-text);
+}
+
+.toast__icon {
+  font-size: 1.1rem;
+  flex-shrink: 0;
+}
+
+.toast__message {
+  flex: 1;
 }
 
 .toast--visible {
   opacity: 1;
-  transform: translateY(0);
+  transform: translate3d(0, 0, 0);
 }
 
 @media (max-width: 600px) {
   .toast {
     left: 50%;
     right: auto;
+    bottom: 1rem;
     transform: translate(-50%, 20px);
+  }
+
+  .toast--visible {
+    transform: translate(-50%, 0);
   }
 }
