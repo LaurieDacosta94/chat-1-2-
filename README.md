@@ -32,15 +32,15 @@ A lightweight WhatsApp-style messaging interface with a companion Node.js + Sock
 ## Getting Started
 
 ### One-command local setup
-To install dependencies and run both the backend API and the static frontend locally, use the helper script:
+To install dependencies and run both the backend API and the static frontend locally, use the Node-powered helper script (works on macOS, Linux, and Windows):
 
 ```bash
-./scripts/setup-and-run.sh
+node scripts/setup-and-run.js
 ```
 
 The script installs `node_modules` on first run and then serves the backend on port 3001 alongside the frontend on port 3000 using `http-server`.
 
-> **Tip:** Ensure PostgreSQL is running locally and reachable via the environment variables described below before starting the script.
+> **Tip:** Ensure PostgreSQL is running locally and reachable via the environment variables described below before starting the script. On Windows PowerShell you can run the same command (`node scripts/setup-and-run.js`) without any additional tooling.
 
 ### Frontend
 1. Open `index.html` in any modern browser to run the app locally.
