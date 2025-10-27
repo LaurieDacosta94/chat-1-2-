@@ -26,12 +26,68 @@ const poolConfig = process.env.DATABASE_URL
 const pool = new Pool(poolConfig);
 
 const app = express();
+
+const rawCorsOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(',').map((origin) => origin.trim()).filter(Boolean)
+  : [];
+const allowAllOrigins = rawCorsOrigins.includes('*');
+const corsAllowedOrigins = allowAllOrigins
+  ? '*'
+  : rawCorsOrigins.length > 0
+  ? rawCorsOrigins
+  : ['http://localhost:3000', 'http://127.0.0.1:3000'];
+
+function corsMiddleware(allowedOrigins) {
+  const normalizedOrigins = allowedOrigins === '*'
+    ? '*'
+    : Array.isArray(allowedOrigins)
+    ? allowedOrigins
+    : [allowedOrigins];
+
+  return (req, res, next) => {
+    const requestOrigin = req.headers.origin;
+
+    if (!requestOrigin) {
+      if (req.method === 'OPTIONS') {
+        res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+        return res.sendStatus(204);
+      }
+      return next();
+    }
+
+    const isAllowed =
+      normalizedOrigins === '*' || normalizedOrigins.includes(requestOrigin);
+
+    if (!isAllowed) {
+      if (req.method === 'OPTIONS') {
+        res.setHeader('Vary', 'Origin');
+        return res.sendStatus(403);
+      }
+      return res.status(403).json({ error: 'Origin not allowed by CORS policy.' });
+    }
+
+    res.setHeader('Access-Control-Allow-Origin', normalizedOrigins === '*' ? '*' : requestOrigin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(204);
+    }
+
+    return next();
+  };
+}
+
+// Allow the frontend to call the API when it's hosted on a different port without pulling in extra dependencies.
+app.use(corsMiddleware(corsAllowedOrigins));
 app.use(express.json());
 
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: process.env.CORS_ORIGIN || '*',
+    origin: corsAllowedOrigins,
     methods: ['GET', 'POST'],
   },
 });
@@ -136,7 +192,8 @@ app.post('/api/register', async (req, res) => {
     }
 
     const newUser = await createUser({ username, password });
-    res.status(201).json({ user: newUser });
+    const token = generateToken(newUser.id);
+    res.status(201).json({ token, user: newUser });
   } catch (error) {
     console.error('Error registering user', error);
     res.status(500).json({ error: 'Failed to register user.' });
