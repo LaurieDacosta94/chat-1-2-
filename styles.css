@@ -407,6 +407,39 @@ body.auth-locked .app {
   color: var(--text-muted);
 }
 
+.chat-item__top-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.chat-item__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background-color: var(--accent);
+  color: #0b141a;
+  font-weight: 600;
+  font-size: 0.7rem;
+}
+
+.chat-item--unread .chat-item__name {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.chat-item--unread .chat-item__preview {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.chat-item--unread .chat-item__timestamp {
+  color: var(--accent);
+}
+
 .chat-item__bottom {
   display: flex;
   align-items: center;

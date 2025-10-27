@@ -409,7 +409,6 @@ const Filter = {
   ARCHIVED: "archived",
 };
 
-const messageStatusTimers = new Map();
 const EMOJI_CHARACTERS = [
   "😀",
   "😁",
@@ -1311,7 +1310,7 @@ function normalizeMessage(message) {
 
   if (normalized.direction === "outgoing") {
     if (!Object.values(MessageStatus).includes(normalized.status)) {
-      normalized.status = MessageStatus.READ;
+      normalized.status = MessageStatus.SENT;
     }
   } else if (normalized.status) {
     delete normalized.status;
@@ -1355,6 +1354,11 @@ function normalizeChat(chat) {
     typeof chat.name === "string" && chat.name.trim()
       ? chat.name.trim()
       : normalizedContact?.displayName ?? "New chat";
+
+  const unreadCount =
+    Number.isFinite(chat.unreadCount) && chat.unreadCount > 0
+      ? Math.min(Math.floor(chat.unreadCount), 999)
+      : 0;
 
   const capabilities = {
     audio:
@@ -1400,6 +1404,7 @@ function normalizeChat(chat) {
     ...(normalizedContact && normalizedType !== ChatType.GROUP
       ? { contact: normalizedContact }
       : {}),
+    unreadCount,
   };
 }
 
@@ -2631,6 +2636,19 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false, 
     if (normalizedMessage.clientId) {
       realtimeState.pendingOutgoing.delete(normalizedMessage.clientId);
     }
+    if (isRealtime && normalizedMessage.direction === "incoming") {
+      if (!isChatInFocus(chat)) {
+        const previousUnread = Number.isFinite(chat.unreadCount) ? chat.unreadCount : 0;
+        const nextUnread = Math.min(previousUnread + 1, 999);
+        if (nextUnread !== previousUnread) {
+          chat.unreadCount = nextUnread;
+          mutated = true;
+        }
+      } else if (chat.unreadCount) {
+        chat.unreadCount = 0;
+        mutated = true;
+      }
+    }
     if (isRealtime) {
       if (normalizedMessage.direction === "incoming") {
         if (shouldNotifyIncomingMessage(chat)) {
@@ -3253,84 +3271,39 @@ function setWallpaper(wallpaper) {
   }
 }
 
-function clearMessageStatusTimers(messageId) {
-  const timers = messageStatusTimers.get(messageId);
-  if (!timers) return;
-  timers.forEach((timerId) => clearTimeout(timerId));
-  messageStatusTimers.delete(messageId);
-}
-
-function updateMessageStatus(chatId, messageId, nextStatus) {
-  if (!Object.values(MessageStatus).includes(nextStatus)) return;
-  const chat = chats.find((c) => c.id === chatId);
-  if (!chat) return;
-  const message = chat.messages.find((m) => m.id === messageId);
-  if (!message || message.direction !== "outgoing") return;
-  if (message.status === nextStatus) return;
-
-  message.status = nextStatus;
-  saveState(chats);
-  renderChats(chatSearchInput.value);
-  if (chat.id === activeChatId) {
-    renderChatView(chat);
-  }
-
-  if (nextStatus === MessageStatus.READ) {
-    clearMessageStatusTimers(messageId);
-  }
-}
-
-function scheduleMessageStatus(chatId, messageId, currentStatus = MessageStatus.SENT) {
-  clearMessageStatusTimers(messageId);
-
-  const timers = [];
-  const randomWithin = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
-
-  if (currentStatus === MessageStatus.SENT) {
-    const deliveredDelay = randomWithin(700, 1300);
-    const readDelay = deliveredDelay + randomWithin(900, 1700);
-    timers.push(
-      setTimeout(() => updateMessageStatus(chatId, messageId, MessageStatus.DELIVERED), deliveredDelay)
-    );
-    timers.push(
-      setTimeout(() => updateMessageStatus(chatId, messageId, MessageStatus.READ), readDelay)
-    );
-  } else if (currentStatus === MessageStatus.DELIVERED) {
-    const readDelay = randomWithin(900, 1700);
-    timers.push(
-      setTimeout(() => updateMessageStatus(chatId, messageId, MessageStatus.READ), readDelay)
-    );
-  }
-
-  if (timers.length) {
-    messageStatusTimers.set(messageId, timers);
-  }
-}
-
-function resetMessageStatusTimers() {
-  Array.from(messageStatusTimers.values()).forEach((timers) => {
-    timers.forEach((timerId) => clearTimeout(timerId));
-  });
-  messageStatusTimers.clear();
-}
-
 function resumePendingStatuses() {
-  resetMessageStatusTimers();
   let mutated = false;
+  const validStatuses = Object.values(MessageStatus);
   chats.forEach((chat) => {
     chat.messages.forEach((message) => {
       if (message.direction !== "outgoing") return;
-      if (!Object.values(MessageStatus).includes(message.status)) {
+      if (!validStatuses.includes(message.status)) {
         message.status = MessageStatus.SENT;
         mutated = true;
       }
-      if (message.status !== MessageStatus.READ) {
-        scheduleMessageStatus(chat.id, message.id, message.status);
-      }
     });
+    const normalizedUnread =
+      Number.isFinite(chat.unreadCount) && chat.unreadCount > 0
+        ? Math.min(Math.floor(chat.unreadCount), 999)
+        : 0;
+    if (chat.unreadCount !== normalizedUnread) {
+      chat.unreadCount = normalizedUnread;
+      mutated = true;
+    }
+    if (chat.id === activeChatId && isChatInFocus(chat) && chat.unreadCount) {
+      chat.unreadCount = 0;
+      mutated = true;
+    }
   });
   if (mutated) {
     saveState(chats);
+    renderChats(chatSearchInput.value);
+    if (activeChatId) {
+      const activeChat = getActiveChat();
+      if (activeChat) {
+        renderChatView(activeChat);
+      }
+    }
   }
 }
 
@@ -3644,6 +3617,7 @@ function renderChats(searchText = "") {
     const previewNode = chatNode.querySelector(".chat-item__preview");
     const metaNode = chatNode.querySelector(".chat-item__meta");
     const avatarNode = chatNode.querySelector(".chat-item__avatar");
+    const badgeNode = chatNode.querySelector(".chat-item__badge");
 
     nameNode.textContent = chat.name;
     avatarNode.textContent = chat.avatar ?? chat.name.slice(0, 1).toUpperCase();
@@ -3660,6 +3634,17 @@ function renderChats(searchText = "") {
 
     const lastMessage = chat.messages.at(-1);
     timestampNode.textContent = lastMessage ? formatMessageTimestamp(lastMessage) : "";
+    const unreadCount = Number.isFinite(chat.unreadCount) ? Math.max(0, chat.unreadCount) : 0;
+    if (badgeNode) {
+      if (unreadCount > 0) {
+        badgeNode.hidden = false;
+        badgeNode.textContent = unreadCount > 99 ? "99+" : String(unreadCount);
+      } else {
+        badgeNode.hidden = true;
+        badgeNode.textContent = "";
+      }
+    }
+    chatNode.classList.toggle("chat-item--unread", unreadCount > 0);
 
     const draftText = getDraft(chat.id)?.trim();
     const draftAttachments = getAttachmentDraft(chat.id);
@@ -4194,6 +4179,11 @@ function openChat(chatId) {
   activeChatId = chatId;
   pendingAttachments = getAttachmentDraft(chatId);
   const chat = getActiveChat();
+  let unreadCleared = false;
+  if (chat && chat.unreadCount) {
+    chat.unreadCount = 0;
+    unreadCleared = true;
+  }
   renderChats(chatSearchInput.value);
   if (isMessageSearchOpen) {
     shouldScrollToActiveSearchMatch = true;
@@ -4206,6 +4196,9 @@ function openChat(chatId) {
     focusMessageSearchInput();
   }
   maybeHideSidebar();
+  if (unreadCleared) {
+    saveState(chats);
+  }
 }
 
 function addMessageToChat(chatId, text, direction = "outgoing", attachments = []) {
@@ -4240,9 +4233,6 @@ function addMessageToChat(chatId, text, direction = "outgoing", attachments = []
   }
 
   saveState(chats);
-  if (isOutgoing) {
-    scheduleMessageStatus(chat.id, newMessage.id, newMessage.status);
-  }
   if (wasArchived && activeFilter === Filter.ARCHIVED) {
     setActiveFilter(Filter.ALL);
   } else {
@@ -5984,25 +5974,31 @@ function buildToastCopy({ prefix, chatName, preview }) {
   return `${prefix} ${safeName}`;
 }
 
-function shouldNotifyIncomingMessage(chat) {
-  // Avoid spamming toasts when the user is already reading the active chat unless the
-  // window is unfocused/hidden.
+function isChatInFocus(chat) {
   if (!chat) {
     return false;
   }
   if (activeChatId !== chat.id) {
-    return true;
-  }
-  if (typeof document === "undefined") {
     return false;
   }
-  if (document.hidden) {
+  if (typeof document === "undefined") {
     return true;
   }
-  if (typeof document.hasFocus === "function") {
-    return !document.hasFocus();
+  if (document.hidden) {
+    return false;
   }
-  return false;
+  if (typeof document.hasFocus === "function") {
+    return document.hasFocus();
+  }
+  return true;
+}
+
+function shouldNotifyIncomingMessage(chat) {
+  // Avoid spamming toasts when the user is already reading the active chat.
+  if (!chat) {
+    return false;
+  }
+  return !isChatInFocus(chat);
 }
 
 function showToast(messageOrOptions, options = {}) {
@@ -6616,6 +6612,11 @@ function hydrate() {
       resumePendingStatuses();
     }
   });
+  if (typeof window !== "undefined") {
+    window.addEventListener("focus", () => {
+      resumePendingStatuses();
+    });
+  }
 
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
