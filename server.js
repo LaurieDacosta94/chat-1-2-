@@ -1063,65 +1063,78 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('sendMessage', async ({ chat_id: chatId, content, recipient_id: recipientId, recipient_ids: recipientIds }) => {
-    if (!authenticatedUserId) {
-      socket.emit('authError', { error: 'Authenticate before sending messages.' });
-      return;
-    }
-    if (!chatId || !content) {
-      socket.emit('messageError', { error: 'chat_id and content are required.' });
-      return;
-    }
+  socket.on(
+    'sendMessage',
+    async ({
+      chat_id: chatId,
+      content,
+      recipient_id: recipientId,
+      recipient_ids: recipientIds,
+      client_id: clientMessageId,
+    }) => {
+      if (!authenticatedUserId) {
+        socket.emit('authError', { error: 'Authenticate before sending messages.' });
+        return;
+      }
+      if (!chatId || !content) {
+        socket.emit('messageError', { error: 'chat_id and content are required.' });
+        return;
+      }
 
-    try {
-      const message = await saveMessage({ chatId, senderId: authenticatedUserId, content });
-      const payload = { ...message, chat_id: chatId };
-      io.to(chatId).emit('message', payload);
-
-      let senderUsername = null;
       try {
-        const sender = await findUserById(authenticatedUserId);
-        senderUsername = sender?.username || null;
-      } catch (_lookupError) {
-        senderUsername = null;
-      }
+        const message = await saveMessage({ chatId, senderId: authenticatedUserId, content });
+        const payload = { ...message, chat_id: chatId };
+        if (clientMessageId) {
+          payload.client_id = clientMessageId;
+        }
+        io.to(chatId).emit('message', payload);
 
-      const preview =
-        typeof content === 'string'
-          ? content.trim().replace(/\s+/g, ' ').slice(0, 140)
-          : '';
+        let senderUsername = null;
+        try {
+          const sender = await findUserById(authenticatedUserId);
+          senderUsername = sender?.username || null;
+        } catch (_lookupError) {
+          senderUsername = null;
+        }
 
-      recordActivity({
-        type: 'message:sent',
-        summary: senderUsername
-          ? `Message from "${senderUsername}" in chat ${chatId}.`
-          : `Message sent in chat ${chatId}.`,
-        details: {
-          chatId,
-          senderId: authenticatedUserId,
-          senderUsername,
-          preview,
-        },
-      });
+        const preview =
+          typeof content === 'string'
+            ? content.trim().replace(/\s+/g, ' ').slice(0, 140)
+            : '';
 
-      const normalizedSenderId = normalizeUserId(authenticatedUserId);
-      const recipients = collectNormalizedRecipientIds({ recipientId, recipientIds });
-      if (normalizedSenderId) {
-        recipients.delete(normalizedSenderId);
-      }
-
-      recipients.forEach((userId) => {
-        const sockets = userSocketMap.get(userId);
-        if (!sockets) return;
-        sockets.forEach((socketId) => {
-          io.to(socketId).emit('message', payload);
+        recordActivity({
+          type: 'message:sent',
+          summary: senderUsername
+            ? `Message from "${senderUsername}" in chat ${chatId}.`
+            : `Message sent in chat ${chatId}.`,
+          details: {
+            chatId,
+            senderId: authenticatedUserId,
+            senderUsername,
+            preview,
+            clientMessageId: clientMessageId ?? null,
+          },
         });
-      });
-    } catch (error) {
-      console.error('Error sending message', error);
-      socket.emit('messageError', { error: 'Failed to send message.' });
+
+        const normalizedSenderId = normalizeUserId(authenticatedUserId);
+        const recipients = collectNormalizedRecipientIds({ recipientId, recipientIds });
+        if (normalizedSenderId) {
+          recipients.delete(normalizedSenderId);
+        }
+
+        recipients.forEach((userId) => {
+          const sockets = userSocketMap.get(userId);
+          if (!sockets) return;
+          sockets.forEach((socketId) => {
+            io.to(socketId).emit('message', payload);
+          });
+        });
+      } catch (error) {
+        console.error('Error sending message', error);
+        socket.emit('messageError', { error: 'Failed to send message.' });
+      }
     }
-  });
+  );
 
   socket.on('typing', ({ chat_id: chatId, isTyping }) => {
     if (!authenticatedUserId || !chatId) return;

@@ -260,6 +260,20 @@ const MessageStatus = {
   READ: "read",
 };
 
+const realtimeState = {
+  socket: null,
+  isAuthenticated: false,
+  pendingAuthToken: null,
+  activeToken: null,
+  pendingChatJoins: new Set(),
+  joinedChats: new Set(),
+  serverMessageIds: new Map(),
+  pendingOutgoing: new Map(),
+  pendingOutbound: [],
+};
+
+let hasLoggedMissingSocketClient = false;
+
 const initialData = [
   {
     id: "team",
@@ -832,6 +846,13 @@ function parseSharedContactDetails(text) {
 function buildContactLookupKey(contact) {
   if (!contact || typeof contact !== "object") return "";
 
+  const accountId = normalizeAccountId(
+    contact.accountId ?? contact.userId ?? extractAccountIdFromKey(contact.lookupKey ?? contact.id)
+  );
+  if (accountId) {
+    return `account:${accountId}`;
+  }
+
   if (typeof contact.email === "string" && contact.email.trim()) {
     return `email:${contact.email.trim().toLowerCase()}`;
   }
@@ -852,8 +873,42 @@ function buildContactLookupKey(contact) {
   return "";
 }
 
+function normalizeAccountId(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return null;
+}
+
+function extractAccountIdFromKey(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.startsWith("account:")) {
+    const account = trimmed.slice("account:".length).trim();
+    return account || null;
+  }
+  return null;
+}
+
 function normalizeContact(contact) {
   if (!contact || typeof contact !== "object") return null;
+
+  const incomingLookup =
+    typeof contact.lookupKey === "string" && contact.lookupKey.trim()
+      ? contact.lookupKey.trim()
+      : "";
+  const incomingId = typeof contact.id === "string" && contact.id.trim() ? contact.id.trim() : "";
 
   const methodValue =
     typeof contact.method === "string" ? contact.method.toLowerCase() : "";
@@ -862,6 +917,20 @@ function normalizeContact(contact) {
     : ContactMethod.NICKNAME;
 
   const normalized = { method };
+
+  if (typeof contact.username === "string" && contact.username.trim()) {
+    normalized.username = truncateText(contact.username.trim(), 80);
+  }
+
+  const accountId =
+    normalizeAccountId(contact.accountId) ||
+    normalizeAccountId(contact.userId) ||
+    extractAccountIdFromKey(incomingLookup) ||
+    extractAccountIdFromKey(incomingId);
+
+  if (accountId) {
+    normalized.accountId = accountId;
+  }
 
   if (typeof contact.displayName === "string" && contact.displayName.trim()) {
     normalized.displayName = truncateText(contact.displayName, 80);
@@ -924,21 +993,19 @@ function normalizeContact(contact) {
     return null;
   }
 
-  const incomingId =
-    typeof contact.id === "string" && contact.id.trim() ? contact.id.trim() : "";
-  const incomingLookup =
-    typeof contact.lookupKey === "string" && contact.lookupKey.trim()
-      ? contact.lookupKey.trim()
-      : "";
   const derivedLookup = buildContactLookupKey({ ...normalized, method });
   if (incomingLookup) {
     normalized.lookupKey = incomingLookup;
+  } else if (normalized.accountId) {
+    normalized.lookupKey = `account:${normalized.accountId}`;
   } else if (derivedLookup) {
     normalized.lookupKey = derivedLookup;
   }
 
   if (incomingId) {
     normalized.id = incomingId;
+  } else if (normalized.accountId) {
+    normalized.id = `account:${normalized.accountId}`;
   } else if (normalized.lookupKey) {
     normalized.id = normalized.lookupKey;
   } else {
@@ -1033,13 +1100,26 @@ function buildContactTooltip(contact) {
 function getContactKey(contact) {
   const normalized = normalizeContact(contact);
   if (!normalized) return "";
+  if (normalized.accountId) {
+    return `account:${normalized.accountId}`;
+  }
   return normalized.id || normalized.lookupKey || "";
+}
+
+function getContactAccountId(contact) {
+  const normalized = normalizeContact(contact);
+  if (!normalized) return null;
+  return normalized.accountId ?? null;
 }
 
 function contactsMatch(contactA, contactB) {
   const normalizedA = normalizeContact(contactA);
   const normalizedB = normalizeContact(contactB);
   if (!normalizedA || !normalizedB) return false;
+
+  if (normalizedA.accountId && normalizedB.accountId && normalizedA.accountId === normalizedB.accountId) {
+    return true;
+  }
 
   if (normalizedA.id && normalizedB.id && normalizedA.id === normalizedB.id) {
     return true;
@@ -1953,6 +2033,498 @@ async function apiRequest(path, { method = "GET", body, includeAuth = true } = {
   return payload ?? {};
 }
 
+function normalizeChatIdentifier(chatId) {
+  if (chatId === null || chatId === undefined) {
+    return null;
+  }
+  if (typeof chatId === "string") {
+    const trimmed = chatId.trim();
+    return trimmed || null;
+  }
+  if (typeof chatId === "number" && Number.isFinite(chatId)) {
+    return String(chatId);
+  }
+  return null;
+}
+
+function getServerMessageSet(chatId) {
+  const normalized = normalizeChatIdentifier(chatId);
+  if (!normalized) {
+    return null;
+  }
+  if (!realtimeState.serverMessageIds.has(normalized)) {
+    realtimeState.serverMessageIds.set(normalized, new Set());
+  }
+  return realtimeState.serverMessageIds.get(normalized);
+}
+
+function recordPendingOutgoingMessage(clientId, chatId, localMessageId) {
+  if (!clientId || !chatId || !localMessageId) {
+    return;
+  }
+  realtimeState.pendingOutgoing.set(clientId, { chatId, localMessageId });
+  if (realtimeState.pendingOutgoing.size > 200) {
+    const oldest = realtimeState.pendingOutgoing.keys().next();
+    if (!oldest.done) {
+      realtimeState.pendingOutgoing.delete(oldest.value);
+    }
+  }
+}
+
+function flushPendingChatJoins() {
+  const socket = realtimeState.socket;
+  if (!socket || !socket.connected || !realtimeState.isAuthenticated) {
+    return;
+  }
+
+  realtimeState.pendingChatJoins.forEach((chatId) => {
+    if (!chatId) return;
+    if (realtimeState.joinedChats.has(chatId)) {
+      return;
+    }
+    socket.emit("joinChat", { chat_id: chatId });
+  });
+}
+
+function flushPendingOutbound() {
+  const socket = realtimeState.socket;
+  if (!socket || !socket.connected || !realtimeState.isAuthenticated) {
+    return;
+  }
+
+  if (!realtimeState.pendingOutbound.length) {
+    return;
+  }
+
+  flushPendingChatJoins();
+
+  const queued = realtimeState.pendingOutbound.splice(0);
+  queued.forEach((entry) => {
+    if (!entry || !entry.payload) {
+      return;
+    }
+    try {
+      socket.emit("sendMessage", entry.payload);
+    } catch (error) {
+      console.error("Failed to flush queued message", error);
+    }
+  });
+}
+
+function handleRealtimeConnect() {
+  const socket = realtimeState.socket;
+  if (!socket) return;
+  const token = authState?.token ?? realtimeState.pendingAuthToken;
+  if (token) {
+    realtimeState.pendingAuthToken = token;
+    socket.emit("authenticate", { token });
+  }
+}
+
+function handleRealtimeAuthenticated() {
+  realtimeState.isAuthenticated = true;
+  realtimeState.activeToken = realtimeState.pendingAuthToken ?? authState?.token ?? realtimeState.activeToken;
+  flushPendingChatJoins();
+  flushPendingOutbound();
+}
+
+function handleRealtimeAuthError(payload) {
+  const message = typeof payload?.error === "string" ? payload.error : "Authentication error.";
+  console.warn("Real-time authentication error", message);
+  realtimeState.isAuthenticated = false;
+
+  const normalized = message.toLowerCase();
+  if (normalized.includes("invalid token") || normalized.includes("missing token") || normalized.includes("token expired")) {
+    showToast("Session expired. Please sign in again.");
+    disconnectRealtime({ keepSocket: true });
+    setAuthState(null);
+    return;
+  }
+
+  if (normalized.includes("authenticate before")) {
+    syncRealtimeConnection();
+  }
+}
+
+function handleRealtimeChatHistory(payload) {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+  const chatId = normalizeChatIdentifier(payload.chat_id);
+  if (!chatId) {
+    return;
+  }
+  realtimeState.joinedChats.add(chatId);
+  const messages = Array.isArray(payload.messages) ? payload.messages : [];
+  applyServerMessages(chatId, messages, { replaceExisting: true });
+}
+
+function handleRealtimeMessage(payload) {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+  const chatId = normalizeChatIdentifier(payload.chat_id);
+  if (!chatId) {
+    return;
+  }
+  applyServerMessages(chatId, [payload]);
+}
+
+function handleRealtimeDisconnect() {
+  realtimeState.isAuthenticated = false;
+  realtimeState.joinedChats.clear();
+  if (authState?.token) {
+    realtimeState.pendingAuthToken = authState.token;
+  }
+}
+
+function handleRealtimeConnectError(error) {
+  console.error("Real-time connection error", error);
+}
+
+function ensureRealtimeSocket() {
+  if (realtimeState.socket) {
+    return realtimeState.socket;
+  }
+
+  if (typeof window === "undefined" || typeof window.io !== "function") {
+    if (!hasLoggedMissingSocketClient) {
+      console.warn("Socket.io client is not available; real-time messaging disabled.");
+      hasLoggedMissingSocketClient = true;
+    }
+    return null;
+  }
+
+  try {
+    const socket = window.io(API_BASE_URL, {
+      autoConnect: false,
+      transports: ["websocket", "polling"],
+    });
+    realtimeState.socket = socket;
+    socket.on("connect", handleRealtimeConnect);
+    socket.on("authenticated", handleRealtimeAuthenticated);
+    socket.on("authError", handleRealtimeAuthError);
+    socket.on("chatHistory", handleRealtimeChatHistory);
+    socket.on("message", handleRealtimeMessage);
+    socket.on("disconnect", handleRealtimeDisconnect);
+    socket.on("connect_error", handleRealtimeConnectError);
+    return socket;
+  } catch (error) {
+    console.error("Failed to initialize real-time messaging", error);
+    realtimeState.socket = null;
+    return null;
+  }
+}
+
+function disconnectRealtime({ keepSocket = true } = {}) {
+  realtimeState.isAuthenticated = false;
+  realtimeState.pendingAuthToken = null;
+  realtimeState.activeToken = null;
+  realtimeState.joinedChats.clear();
+  realtimeState.pendingChatJoins.clear();
+  realtimeState.pendingOutbound = [];
+  realtimeState.serverMessageIds.clear();
+  realtimeState.pendingOutgoing.clear();
+
+  const socket = realtimeState.socket;
+  if (!socket) {
+    return;
+  }
+
+  try {
+    socket.disconnect();
+  } catch (error) {
+    console.error("Error closing real-time connection", error);
+  }
+
+  if (!keepSocket) {
+    realtimeState.socket = null;
+  }
+}
+
+function syncRealtimeConnection() {
+  const socket = ensureRealtimeSocket();
+  if (!authState || !authState.token) {
+    disconnectRealtime({ keepSocket: true });
+    return;
+  }
+  if (!socket) {
+    return;
+  }
+
+  const token = authState.token;
+  realtimeState.pendingAuthToken = token;
+
+  if (!socket.connected) {
+    try {
+      socket.connect();
+    } catch (error) {
+      console.error("Failed to connect to real-time messaging service", error);
+    }
+    return;
+  }
+
+  if (realtimeState.isAuthenticated && realtimeState.activeToken === token) {
+    flushPendingChatJoins();
+    flushPendingOutbound();
+    return;
+  }
+
+  socket.emit("authenticate", { token });
+}
+
+function joinChatRealtime(chatId) {
+  const normalized = normalizeChatIdentifier(chatId);
+  if (!normalized) {
+    return;
+  }
+  realtimeState.pendingChatJoins.add(normalized);
+  if (!authState || !authState.token) {
+    return;
+  }
+
+  const socket = ensureRealtimeSocket();
+  if (!socket) {
+    return;
+  }
+
+  if (realtimeState.isAuthenticated && socket.connected && !realtimeState.joinedChats.has(normalized)) {
+    socket.emit("joinChat", { chat_id: normalized });
+  }
+  syncRealtimeConnection();
+}
+
+function buildServerMessageContent(text, attachments = []) {
+  const normalizedText = typeof text === "string" ? text.trim() : "";
+  if (normalizedText) {
+    return normalizedText;
+  }
+
+  const normalizedAttachments = Array.isArray(attachments)
+    ? attachments.map((attachment) => normalizeAttachment(attachment)).filter(Boolean)
+    : [];
+
+  if (!normalizedAttachments.length) {
+    return "";
+  }
+
+  const [first, ...rest] = normalizedAttachments;
+  if (isVoiceNote(first)) {
+    const duration = formatVoiceDuration(getVoiceNoteDurationSeconds(first));
+    const suffix = rest.length ? ` (+${rest.length})` : "";
+    return `[Voice message] ${duration}${suffix}`;
+  }
+
+  const label = getAttachmentLabel(first);
+  const name = typeof first.name === "string" ? first.name.trim() : "";
+  if (!rest.length) {
+    return name ? `[${label}] ${name}` : `[${label}]`;
+  }
+
+  return `[Attachments] ${normalizedAttachments.length} items`;
+}
+
+function buildLocalMessageFromServer(chatId, payload) {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const text = typeof payload.content === "string" ? payload.content : "";
+  const rawTimestamp = typeof payload.timestamp === "string" ? payload.timestamp : "";
+  const parsed = new Date(rawTimestamp);
+  const timestamp = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+  const senderId = payload.sender_id ?? null;
+  const direction = senderId !== null && authState?.user?.id === senderId ? "outgoing" : "incoming";
+
+  const message = {
+    id:
+      typeof payload.client_id === "string" && payload.client_id
+        ? `client-${payload.client_id}`
+        : payload.id !== undefined && payload.id !== null
+        ? `server-${payload.id}`
+        : crypto.randomUUID(),
+    text,
+    direction,
+    sentAt: timestamp.toISOString(),
+    timestamp: formatTimeFromDate(timestamp),
+    attachments: [],
+    serverId: payload.id !== undefined && payload.id !== null ? String(payload.id) : null,
+    clientId: typeof payload.client_id === "string" && payload.client_id ? payload.client_id : null,
+    senderId,
+  };
+
+  if (direction === "outgoing") {
+    message.status = MessageStatus.DELIVERED;
+  }
+
+  return message;
+}
+
+function applyServerMessages(chatId, serverPayloads, { replaceExisting = false } = {}) {
+  const normalizedChatId = normalizeChatIdentifier(chatId);
+  if (!normalizedChatId) {
+    return;
+  }
+
+  const chat = chats.find((candidate) => candidate.id === normalizedChatId);
+  if (!chat) {
+    return;
+  }
+
+  const serverMessageIds = getServerMessageSet(normalizedChatId);
+  let mutated = false;
+
+  if (replaceExisting) {
+    if (chat.messages && chat.messages.some((message) => message && message.serverId)) {
+      chat.messages = chat.messages.filter((message) => !message.serverId);
+      mutated = true;
+    }
+    serverMessageIds?.clear();
+  }
+
+  const payloads = Array.isArray(serverPayloads) ? serverPayloads : [];
+  payloads.forEach((payload) => {
+    const normalizedMessage = buildLocalMessageFromServer(normalizedChatId, payload);
+    if (!normalizedMessage) {
+      return;
+    }
+
+    if (normalizedMessage.serverId && serverMessageIds?.has(normalizedMessage.serverId)) {
+      const existing = chat.messages.find((message) => message.serverId === normalizedMessage.serverId);
+      if (existing) {
+        const preservedId = existing.id;
+        const preservedAttachments = Array.isArray(existing.attachments) ? existing.attachments : [];
+        Object.assign(existing, normalizedMessage, {
+          id: preservedId,
+          attachments: preservedAttachments,
+        });
+        serverMessageIds.add(normalizedMessage.serverId);
+        if (normalizedMessage.clientId) {
+          realtimeState.pendingOutgoing.delete(normalizedMessage.clientId);
+        }
+        mutated = true;
+        return;
+      }
+    }
+
+    if (normalizedMessage.clientId) {
+      const pending = realtimeState.pendingOutgoing.get(normalizedMessage.clientId);
+      if (pending && pending.chatId === normalizedChatId) {
+        const existing = chat.messages.find((message) => message.id === pending.localMessageId);
+        if (existing) {
+          const preservedAttachments = Array.isArray(existing.attachments) ? existing.attachments : [];
+          Object.assign(existing, normalizedMessage, {
+            id: existing.id,
+            attachments: preservedAttachments,
+          });
+          if (normalizedMessage.serverId && serverMessageIds) {
+            existing.serverId = normalizedMessage.serverId;
+            serverMessageIds.add(normalizedMessage.serverId);
+          }
+          realtimeState.pendingOutgoing.delete(normalizedMessage.clientId);
+          mutated = true;
+          return;
+        }
+      }
+    }
+
+    const assignedId = normalizedMessage.serverId ? `server-${normalizedMessage.serverId}` : normalizedMessage.id;
+    const messageToInsert = {
+      ...normalizedMessage,
+      id: assignedId,
+    };
+    chat.messages.push(messageToInsert);
+    if (normalizedMessage.serverId && serverMessageIds) {
+      serverMessageIds.add(normalizedMessage.serverId);
+    }
+    if (normalizedMessage.clientId) {
+      realtimeState.pendingOutgoing.delete(normalizedMessage.clientId);
+    }
+    mutated = true;
+  });
+
+  if (mutated) {
+    chat.messages.sort((a, b) => getMessageTimeValue(a) - getMessageTimeValue(b));
+    saveState(chats);
+    renderChats(chatSearchInput.value);
+    if (activeChatId === normalizedChatId) {
+      renderChatView(chat);
+    }
+  }
+}
+
+function sendOutgoingMessageToServer(chat, message, text, attachments = []) {
+  if (!chat || !message) {
+    return;
+  }
+
+  if (!authState || !authState.token) {
+    return;
+  }
+
+  const socket = ensureRealtimeSocket();
+  if (!socket) {
+    return;
+  }
+
+  const normalizedChatId = normalizeChatIdentifier(chat.id);
+  if (!normalizedChatId) {
+    return;
+  }
+
+  const content = buildServerMessageContent(text, attachments);
+  if (!content) {
+    return;
+  }
+
+  if (authState?.user?.id !== undefined) {
+    message.senderId = authState.user.id;
+  }
+
+  const clientMessageId = crypto.randomUUID();
+  message.clientId = clientMessageId;
+  if (message.serverId === undefined) {
+    message.serverId = null;
+  }
+  recordPendingOutgoingMessage(clientMessageId, normalizedChatId, message.id);
+
+  const payload = {
+    chat_id: normalizedChatId,
+    content,
+    client_id: clientMessageId,
+  };
+
+  if (chat.type === ChatType.DIRECT) {
+    const recipientAccountId = getContactAccountId(chat.contact);
+    if (recipientAccountId) {
+      payload.recipient_id = recipientAccountId;
+    }
+  }
+
+  realtimeState.pendingChatJoins.add(normalizedChatId);
+
+  if (!realtimeState.isAuthenticated || !socket.connected) {
+    realtimeState.pendingOutbound.push({ chatId: normalizedChatId, payload });
+    if (realtimeState.pendingOutbound.length > 200) {
+      realtimeState.pendingOutbound.shift();
+    }
+    syncRealtimeConnection();
+    return;
+  }
+
+  flushPendingChatJoins();
+
+  try {
+    socket.emit("sendMessage", payload);
+  } catch (error) {
+    console.error("Failed to send message to server", error);
+    realtimeState.pendingOutbound.push({ chatId: normalizedChatId, payload });
+    if (realtimeState.pendingOutbound.length > 200) {
+      realtimeState.pendingOutbound.shift();
+    }
+  }
+}
+
 function updateAuthUI() {
   const authenticated = isAuthenticated();
 
@@ -1994,6 +2566,7 @@ function setAuthState(nextState) {
     clearAuthStateStorage();
     setActiveAuthView(AuthView.LOGIN);
     updateAuthUI();
+    syncRealtimeConnection();
     return;
   }
 
@@ -2002,6 +2575,7 @@ function setAuthState(nextState) {
   applyAuthenticatedUserToProfile(authState);
   reloadStateForActiveUser({ preserveChat: false });
   updateAuthUI();
+  syncRealtimeConnection();
 }
 
 function handleAuthTabClick(event) {
@@ -2544,6 +3118,7 @@ let contacts = sortContacts(loadContacts());
 let activeProfile = loadProfile();
 if (authState) {
   applyAuthenticatedUserToProfile(authState, { persist: false });
+  syncRealtimeConnection();
 }
 syncContactsFromChats();
 let activeTheme = loadTheme();
@@ -3400,6 +3975,9 @@ function openChat(chatId) {
     shouldScrollToActiveSearchMatch = true;
   }
   renderChatView(chat);
+  if (chat) {
+    joinChatRealtime(chat.id);
+  }
   if (isMessageSearchOpen) {
     focusMessageSearchInput();
   }
@@ -3423,7 +4001,12 @@ function addMessageToChat(chatId, text, direction = "outgoing", attachments = []
     timestamp: formatTimeFromDate(sentAt),
     attachments: normalizedAttachments,
     ...(isOutgoing ? { status: MessageStatus.SENT } : {}),
+    serverId: null,
+    clientId: null,
   };
+  if (isOutgoing && authState?.user?.id !== undefined) {
+    newMessage.senderId = authState.user.id;
+  }
   chat.messages.push(newMessage);
   chat.messages.sort((a, b) => getMessageTimeValue(a) - getMessageTimeValue(b));
 
@@ -3442,7 +4025,7 @@ function addMessageToChat(chatId, text, direction = "outgoing", attachments = []
     renderChats(chatSearchInput.value);
   }
   renderChatView(chat);
-  return { wasArchived };
+  return { wasArchived, message: newMessage };
 }
 
 function createChat(nameInput, options = {}) {
@@ -3578,7 +4161,10 @@ function handleSend() {
   clearPendingAttachments(chat.id, { silent: true });
   renderComposerAttachments();
 
-  const { wasArchived } = addMessageToChat(chat.id, text, "outgoing", attachmentsToSend);
+  const { wasArchived, message } = addMessageToChat(chat.id, text, "outgoing", attachmentsToSend);
+  if (message) {
+    sendOutgoingMessageToServer(chat, message, message.text, message.attachments);
+  }
   messageInput.value = "";
   autoResizeTextarea();
   setDraft(chat.id, "");
@@ -3821,7 +4407,10 @@ function stopVoiceRecorder({ send = false, suppressToast = false } = {}) {
     }
     const attachment = createVoiceNoteAttachment(elapsedSeconds);
     if (attachment) {
-      addMessageToChat(chat.id, "", "outgoing", [attachment]);
+      const { message } = addMessageToChat(chat.id, "", "outgoing", [attachment]);
+      if (message) {
+        sendOutgoingMessageToServer(chat, message, message.text, message.attachments);
+      }
       if (!suppressToast) {
         showToast("Voice message sent");
       }
@@ -4163,6 +4752,75 @@ function resetNewContactForm() {
   resetContactLookup();
 }
 
+// When a user selects a nickname or email that matches an existing account we surface
+// via the lookup API, enrich the contact with the persisted account identifier so
+// outbound messages can be routed to the correct user sockets.
+function findAccountMatchForContact(contact) {
+  if (!contact || typeof contact !== "object") {
+    return null;
+  }
+  const results = Array.isArray(contactLookupState?.results) ? contactLookupState.results : [];
+  if (!results.length) {
+    return null;
+  }
+
+  const candidateKeys = new Set();
+  const addCandidate = (value) => {
+    if (typeof value !== "string") return;
+    const trimmed = value.trim().toLowerCase();
+    if (trimmed) {
+      candidateKeys.add(trimmed);
+    }
+  };
+
+  addCandidate(contact.nickname);
+  addCandidate(contact.displayName);
+  addCandidate(contact.email);
+
+  if (!candidateKeys.size) {
+    return null;
+  }
+
+  for (const entry of results) {
+    if (!entry) continue;
+    const username =
+      typeof entry.username === "string" && entry.username.trim() ? entry.username.trim() : "";
+    const normalizedUsername = username.toLowerCase();
+    if (!username || !candidateKeys.has(normalizedUsername)) {
+      continue;
+    }
+    const accountId = normalizeAccountId(entry.id ?? entry.userId ?? null);
+    if (!accountId) {
+      continue;
+    }
+    return { accountId, username };
+  }
+
+  return null;
+}
+
+function applyAccountMatchMetadata(contact) {
+  const match = findAccountMatchForContact(contact);
+  if (!match) {
+    return;
+  }
+
+  contact.accountId = match.accountId;
+  contact.username = match.username;
+  if (typeof contact.lookupKey !== "string" || !contact.lookupKey.trim()) {
+    contact.lookupKey = `account:${match.accountId}`;
+  }
+  if (typeof contact.id !== "string" || !contact.id.trim()) {
+    contact.id = contact.lookupKey;
+  }
+  if (typeof contact.displayName !== "string" || !contact.displayName.trim()) {
+    contact.displayName = match.username;
+  }
+  if (typeof contact.nickname !== "string" || !contact.nickname.trim()) {
+    contact.nickname = match.username;
+  }
+}
+
 function collectNewContactData({ strict = false, showErrors = false } = {}) {
   if (!newContactForm) return null;
   const method = getActiveNewContactMethod();
@@ -4290,6 +4948,8 @@ function collectNewContactData({ strict = false, showErrors = false } = {}) {
   if (typeof contact.notes === "string") {
     contact.notes = contact.notes.trim();
   }
+
+  applyAccountMatchMetadata(contact);
 
   const normalized = normalizeContact(contact);
   if (!normalized) {
@@ -5698,9 +6358,11 @@ function hydrate() {
       applyAuthenticatedUserToProfile(authState);
       reloadStateForActiveUser({ preserveChat: false });
       updateAuthUI();
+      syncRealtimeConnection();
       return;
     }
 
+    disconnectRealtime({ keepSocket: true });
     resetAppDataToDefaults({ auth: previousAuth });
     setActiveAuthView(AuthView.LOGIN);
     updateAuthUI();
