@@ -63,6 +63,8 @@ The script installs `node_modules` on first run and then serves the backend on p
    JWT_SECRET=super-secret-key
    CORS_ORIGIN=http://localhost:3000
    ```
+   Provide a comma-separated list (e.g. `https://app.example.com,https://www.example.com`) if you need to allow multiple origins;
+   omit the variable entirely to fall back to common localhost defaults.
 3. Initialize the database using the SQL in [`db/schema.sql`](db/schema.sql).
 4. Start the server:
    ```bash
