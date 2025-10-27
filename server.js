@@ -330,10 +330,57 @@ function normalizeUserId(value) {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return String(value);
   }
+  if (typeof value === 'bigint') {
+    return value.toString();
+  }
   if (typeof value === 'string' && value.trim()) {
     return value.trim();
   }
   return null;
+}
+
+// Clients occasionally send `recipient_ids` as a serialized string (comma-separated
+// or JSON). We coerce those payloads into a consistent set of normalized user IDs
+// so that direct message forwarding works regardless of the input shape.
+function collectNormalizedRecipientIds({ recipientId, recipientIds }) {
+  const recipients = new Set();
+
+  const addCandidate = (candidate) => {
+    const normalized = normalizeUserId(candidate);
+    if (normalized) {
+      recipients.add(normalized);
+    }
+  };
+
+  if (Array.isArray(recipientIds)) {
+    recipientIds.forEach(addCandidate);
+  } else if (typeof recipientIds === 'string') {
+    const trimmed = recipientIds.trim();
+    if (trimmed) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) {
+          parsed.forEach(addCandidate);
+        } else {
+          addCandidate(parsed);
+        }
+      } catch (_error) {
+        trimmed
+          .split(',')
+          .map((value) => value.trim())
+          .filter(Boolean)
+          .forEach(addCandidate);
+      }
+    }
+  } else if (recipientIds !== undefined && recipientIds !== null) {
+    addCandidate(recipientIds);
+  }
+
+  if (recipientId !== undefined) {
+    addCandidate(recipientId);
+  }
+
+  return recipients;
 }
 
 function addSocketForUser(userId, socketId) {
@@ -921,21 +968,7 @@ io.on('connection', (socket) => {
       io.to(chatId).emit('message', payload);
 
       const normalizedSenderId = normalizeUserId(authenticatedUserId);
-      const recipients = new Set();
-      if (Array.isArray(recipientIds)) {
-        recipientIds.forEach((id) => {
-          const normalized = normalizeUserId(id);
-          if (normalized) {
-            recipients.add(normalized);
-          }
-        });
-      }
-      if (recipientId !== undefined) {
-        const normalized = normalizeUserId(recipientId);
-        if (normalized) {
-          recipients.add(normalized);
-        }
-      }
+      const recipients = collectNormalizedRecipientIds({ recipientId, recipientIds });
       if (normalizedSenderId) {
         recipients.delete(normalizedSenderId);
       }
