@@ -10,8 +10,18 @@ process.chdir(rootDir);
 const isWindows = process.platform === 'win32';
 const npmCmd = isWindows ? 'npm.cmd' : 'npm';
 
+const baseEnv = {
+  ...process.env,
+  npm_config_workspaces: 'false',
+};
+
 function runOrExit(command, args, options = {}) {
-  const result = spawnSync(command, args, { stdio: 'inherit', ...options });
+  const result = spawnSync(command, args, {
+    stdio: 'inherit',
+    shell: isWindows,
+    env: baseEnv,
+    ...options,
+  });
 
   if (result.error) {
     throw result.error;
@@ -44,7 +54,11 @@ console.log(`\nLocal services are starting:
 
 Use Ctrl+C to stop both processes.`);
 
-const child = spawn(npmCmd, ['run', 'start:all'], { stdio: 'inherit' });
+const child = spawn(npmCmd, ['run', 'start:all'], {
+  stdio: 'inherit',
+  shell: isWindows,
+  env: baseEnv,
+});
 
 child.on('exit', (code, signal) => {
   if (signal) {
