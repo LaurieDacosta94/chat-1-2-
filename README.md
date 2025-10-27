@@ -26,6 +26,7 @@ A lightweight WhatsApp-style messaging interface with a companion Node.js + Sock
 - 🔐 User registration & login with bcrypt password hashing.
 - 🛡️ JWT-based session token generation for lightweight authentication.
 - 💾 PostgreSQL persistence for user profiles and chat messages.
+- 🧪 Automatic in-memory fallback for local development when PostgreSQL isn't reachable (or when `USE_IN_MEMORY_DB=true`).
 - ⚡ Real-time messaging, chat history hydration, and typing indicators powered by Socket.io rooms.
 - 🌐 Render-friendly configuration using environment variables (supports `DATABASE_URL` or discrete PG settings).
 
@@ -60,11 +61,20 @@ The script installs `node_modules` on first run and then serves the backend on p
    ```env
    PORT=3001
    DATABASE_URL=postgres://user:password@host:5432/chat_app
+   PGHOST=localhost
+   PGPORT=5432
+   PGUSER=postgres
+   PGPASSWORD=your-postgres-password
+   PGDATABASE=chat_app
    JWT_SECRET=super-secret-key
    CORS_ORIGIN=http://localhost:3000
+   USE_IN_MEMORY_DB=false
    ```
    Provide a comma-separated list (e.g. `https://app.example.com,https://www.example.com`) if you need to allow multiple origins;
    omit the variable entirely to fall back to common localhost defaults.
+   Set `USE_IN_MEMORY_DB=true` to run the API without PostgreSQL. The server also automatically falls back to this ephemeral
+   store (with a console warning) if it cannot authenticate with the configured database—handy when you're prototyping or
+   troubleshooting local credentials.
 3. Initialize the database using the SQL in [`db/schema.sql`](db/schema.sql).
 4. Start the server:
    ```bash

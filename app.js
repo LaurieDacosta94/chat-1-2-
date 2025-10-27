@@ -117,6 +117,8 @@ const authSwitchButton = document.getElementById("auth-switch");
 const authSwitchMessageElement = document.getElementById("auth-switch-message");
 const authTitleElement = document.getElementById("auth-title");
 const authSubtitleElement = document.getElementById("auth-subtitle");
+const authTabsElement = document.getElementById("auth-tabs");
+const authTabButtons = Array.from(document.querySelectorAll("[data-auth-tab]"));
 const authSubmitButtons = Array.from(document.querySelectorAll("[data-auth-submit]"));
 const signOutButton = document.getElementById("sign-out-button");
 
@@ -1517,9 +1519,35 @@ function setActiveAuthView(view, { focusFirstField = false } = {}) {
   }
   if (authLoginForm) {
     authLoginForm.hidden = nextView !== AuthView.LOGIN;
+    if (nextView === AuthView.LOGIN) {
+      authLoginForm.removeAttribute("tabindex");
+    } else {
+      authLoginForm.setAttribute("tabindex", "-1");
+    }
   }
   if (authSignupForm) {
     authSignupForm.hidden = nextView !== AuthView.SIGNUP;
+    if (nextView === AuthView.SIGNUP) {
+      authSignupForm.removeAttribute("tabindex");
+    } else {
+      authSignupForm.setAttribute("tabindex", "-1");
+    }
+  }
+  if (authTabsElement) {
+    authTabsElement.setAttribute("data-active-view", nextView);
+  }
+  if (authTabButtons.length) {
+    authTabButtons.forEach((button) => {
+      const targetView = button.dataset.authTab === AuthView.SIGNUP ? AuthView.SIGNUP : AuthView.LOGIN;
+      const isActive = targetView === nextView;
+      button.classList.toggle("auth-overlay__tab--active", isActive);
+      button.setAttribute("aria-selected", isActive ? "true" : "false");
+      if (isActive) {
+        button.removeAttribute("tabindex");
+      } else {
+        button.setAttribute("tabindex", "-1");
+      }
+    });
   }
   if (authTitleElement) {
     authTitleElement.textContent =
@@ -1528,12 +1556,14 @@ function setActiveAuthView(view, { focusFirstField = false } = {}) {
   if (authSubtitleElement) {
     authSubtitleElement.textContent =
       nextView === AuthView.LOGIN
-        ? "Sign in to continue."
+        ? "Sign in to sync messages between devices."
         : "Create an account to start messaging.";
   }
   if (authSwitchMessageElement) {
     authSwitchMessageElement.textContent =
-      nextView === AuthView.LOGIN ? "Need an account?" : "Already have an account?";
+      nextView === AuthView.LOGIN
+        ? "Don't have an account yet?"
+        : "Already have an account?";
   }
   if (authSwitchButton) {
     authSwitchButton.dataset.authTarget =
@@ -1687,6 +1717,17 @@ function setAuthState(nextState) {
   updateAuthUI();
 }
 
+function handleAuthTabClick(event) {
+  if (!(event?.currentTarget instanceof HTMLElement)) {
+    return;
+  }
+
+  const targetView = event.currentTarget.dataset.authTab === AuthView.SIGNUP
+    ? AuthView.SIGNUP
+    : AuthView.LOGIN;
+  setActiveAuthView(targetView, { focusFirstField: true });
+}
+
 function handleAuthSwitch(event) {
   if (!(event?.currentTarget instanceof HTMLElement)) {
     return;
@@ -1838,6 +1879,11 @@ function handleSignOut() {
 function initializeAuthUI() {
   setActiveAuthView(activeAuthView);
 
+  if (authTabButtons.length) {
+    authTabButtons.forEach((button) => {
+      button.addEventListener("click", handleAuthTabClick);
+    });
+  }
   if (authSwitchButton) {
     authSwitchButton.addEventListener("click", handleAuthSwitch);
   }

@@ -10,6 +10,114 @@ const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'development-secret-change-me';
 const MAX_CHAT_HISTORY = 50;
 
+// When PostgreSQL is unavailable (for example, due to missing credentials on a
+// local machine), we fall back to a lightweight in-memory store so developers
+// can still sign up, log in, and exchange messages. Data stored this way is
+// ephemeral and cleared whenever the server restarts.
+const fatalPgCodes = new Set(['28P01', '3D000', '57P01']);
+const fatalNodeCodes = new Set(['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND']);
+
+function isFatalDatabaseError(error) {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  if (fatalPgCodes.has(error.code)) {
+    return true;
+  }
+
+  if (fatalNodeCodes.has(error.code) || fatalNodeCodes.has(error.errno)) {
+    return true;
+  }
+
+  const message = typeof error.message === 'string' ? error.message.toLowerCase() : '';
+  if (!message) {
+    return false;
+  }
+
+  if (message.includes('password authentication failed')) return true;
+  if (message.includes('no pg_hba.conf entry')) return true;
+  if (message.includes('role') && message.includes('does not exist')) return true;
+  if (message.includes('database') && message.includes('does not exist')) return true;
+  if (message.includes('connection refused')) return true;
+
+  return false;
+}
+
+let hasLoggedInMemoryWarning = false;
+let hasClosedPoolConnection = false;
+
+function logInMemoryFallback(reason) {
+  const trimmedReason = typeof reason === 'string' ? reason.trim() : '';
+
+  if (!hasLoggedInMemoryWarning) {
+    console.warn('⚠️  Falling back to an in-memory data store. Data will be reset when the server restarts.');
+    if (trimmedReason) {
+      console.warn(`   ↳ Reason: ${trimmedReason}`);
+    }
+    hasLoggedInMemoryWarning = true;
+    return;
+  }
+
+  if (trimmedReason) {
+    console.warn(`⚠️  Continuing with in-memory data store due to: ${trimmedReason}`);
+  }
+}
+
+function createInMemoryStore() {
+  let nextUserId = 1;
+  let nextMessageId = 1;
+  const usersByUsername = new Map();
+  const messagesByChatId = new Map();
+
+  return {
+    insertUser({ username, passwordHash }) {
+      const createdAt = new Date().toISOString();
+      if (usersByUsername.has(username)) {
+        const error = new Error('Username is already taken.');
+        error.code = '23505';
+        throw error;
+      }
+      const record = {
+        id: nextUserId++,
+        username,
+        password_hash: passwordHash,
+        created_at: createdAt,
+      };
+      usersByUsername.set(username, record);
+      return { id: record.id, username: record.username };
+    },
+    findUser(username) {
+      const record = usersByUsername.get(username);
+      return record ? { ...record } : null;
+    },
+    insertMessage({ chatId, senderId, content }) {
+      const timestamp = new Date().toISOString();
+      const record = {
+        id: nextMessageId++,
+        chat_id: chatId,
+        sender_id: senderId,
+        content,
+        timestamp,
+      };
+      if (!messagesByChatId.has(chatId)) {
+        messagesByChatId.set(chatId, []);
+      }
+      messagesByChatId.get(chatId).push(record);
+      return { ...record };
+    },
+    getRecentMessages(chatId, limit) {
+      const messages = messagesByChatId.get(chatId) ?? [];
+      if (!messages.length) {
+        return [];
+      }
+      const normalizedLimit = Number.isFinite(limit) && limit > 0 ? limit : messages.length;
+      const startIndex = Math.max(messages.length - normalizedLimit, 0);
+      return messages.slice(startIndex).map((message) => ({ ...message }));
+    },
+  };
+}
+
 const poolConfig = process.env.DATABASE_URL
   ? {
       connectionString: process.env.DATABASE_URL,
@@ -23,7 +131,38 @@ const poolConfig = process.env.DATABASE_URL
       database: process.env.PGDATABASE || 'chat_app',
     };
 
-const pool = new Pool(poolConfig);
+const forceInMemoryStore = process.env.USE_IN_MEMORY_DB === 'true';
+let useInMemoryStore = forceInMemoryStore;
+const inMemoryStore = createInMemoryStore();
+let pool = null;
+
+if (useInMemoryStore) {
+  logInMemoryFallback('USE_IN_MEMORY_DB is enabled');
+} else {
+  pool = new Pool(poolConfig);
+}
+
+function enableInMemoryFallback(error) {
+  if (useInMemoryStore) {
+    return true;
+  }
+
+  if (!isFatalDatabaseError(error)) {
+    return false;
+  }
+
+  useInMemoryStore = true;
+  const reason = error && typeof error.message === 'string' ? error.message : '';
+  logInMemoryFallback(reason);
+
+  if (pool && !hasClosedPoolConnection) {
+    hasClosedPoolConnection = true;
+    pool.end().catch(() => {});
+    pool = null;
+  }
+
+  return true;
+}
 
 const app = express();
 
@@ -112,54 +251,99 @@ function removeSocketForUser(userId, socketId) {
 
 async function createUser({ username, password }) {
   const hashedPassword = await bcrypt.hash(password, 12);
-  const result = await pool.query(
-    `INSERT INTO users (username, password_hash)
-     VALUES ($1, $2)
-     RETURNING id, username`,
-    [username, hashedPassword]
-  );
-  return result.rows[0];
+
+  if (useInMemoryStore || !pool) {
+    return inMemoryStore.insertUser({ username, passwordHash: hashedPassword });
+  }
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO users (username, password_hash)
+       VALUES ($1, $2)
+       RETURNING id, username`,
+      [username, hashedPassword]
+    );
+    return result.rows[0];
+  } catch (error) {
+    if (enableInMemoryFallback(error)) {
+      return inMemoryStore.insertUser({ username, passwordHash: hashedPassword });
+    }
+    throw error;
+  }
 }
 
 async function findUserByUsername(username) {
-  const result = await pool.query(
-    `SELECT id, username, password_hash
-     FROM users
-     WHERE username = $1`,
-    [username]
-  );
-  return result.rows[0] || null;
+  if (useInMemoryStore || !pool) {
+    return inMemoryStore.findUser(username);
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT id, username, password_hash
+       FROM users
+       WHERE username = $1`,
+      [username]
+    );
+    return result.rows[0] || null;
+  } catch (error) {
+    if (enableInMemoryFallback(error)) {
+      return inMemoryStore.findUser(username);
+    }
+    throw error;
+  }
 }
 
 async function saveMessage({ chatId, senderId, content }) {
-  const result = await pool.query(
-    `INSERT INTO messages (chat_id, sender_id, content)
-     VALUES ($1, $2, $3)
-     RETURNING id, chat_id, sender_id, content, timestamp`,
-    [chatId, senderId, content]
-  );
-  const message = result.rows[0];
-  if (message && message.timestamp instanceof Date) {
-    message.timestamp = message.timestamp.toISOString();
+  if (useInMemoryStore || !pool) {
+    return inMemoryStore.insertMessage({ chatId, senderId, content });
   }
-  return message;
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO messages (chat_id, sender_id, content)
+       VALUES ($1, $2, $3)
+       RETURNING id, chat_id, sender_id, content, timestamp`,
+      [chatId, senderId, content]
+    );
+    const message = result.rows[0];
+    if (message && message.timestamp instanceof Date) {
+      message.timestamp = message.timestamp.toISOString();
+    }
+    return message;
+  } catch (error) {
+    if (enableInMemoryFallback(error)) {
+      return inMemoryStore.insertMessage({ chatId, senderId, content });
+    }
+    throw error;
+  }
 }
 
 async function fetchRecentMessages(chatId, limit = MAX_CHAT_HISTORY) {
-  const result = await pool.query(
-    `SELECT id, chat_id, sender_id, content, timestamp
-     FROM messages
-     WHERE chat_id = $1
-     ORDER BY timestamp DESC
-     LIMIT $2`,
-    [chatId, limit]
-  );
-  return result.rows
-    .map((row) => ({
-      ...row,
-      timestamp: row.timestamp instanceof Date ? row.timestamp.toISOString() : row.timestamp,
-    }))
-    .reverse();
+  if (useInMemoryStore || !pool) {
+    return inMemoryStore.getRecentMessages(chatId, limit);
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT id, chat_id, sender_id, content, timestamp
+       FROM messages
+       WHERE chat_id = $1
+       ORDER BY timestamp DESC
+       LIMIT $2`,
+      [chatId, limit]
+    );
+    return result.rows
+      .map((row) => ({
+        ...row,
+        timestamp: row.timestamp instanceof Date ? row.timestamp.toISOString() : row.timestamp,
+      }))
+      .reverse();
+  } catch (error) {
+    if (enableInMemoryFallback(error)) {
+      return inMemoryStore.getRecentMessages(chatId, limit);
+    }
+    throw error;
+  }
 }
 
 function generateToken(userId) {
