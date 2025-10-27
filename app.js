@@ -846,6 +846,13 @@ function parseSharedContactDetails(text) {
 function buildContactLookupKey(contact) {
   if (!contact || typeof contact !== "object") return "";
 
+  const accountId = normalizeAccountId(
+    contact.accountId ?? contact.userId ?? extractAccountIdFromKey(contact.lookupKey ?? contact.id)
+  );
+  if (accountId) {
+    return `account:${accountId}`;
+  }
+
   if (typeof contact.email === "string" && contact.email.trim()) {
     return `email:${contact.email.trim().toLowerCase()}`;
   }
@@ -866,8 +873,42 @@ function buildContactLookupKey(contact) {
   return "";
 }
 
+function normalizeAccountId(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return null;
+}
+
+function extractAccountIdFromKey(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.startsWith("account:")) {
+    const account = trimmed.slice("account:".length).trim();
+    return account || null;
+  }
+  return null;
+}
+
 function normalizeContact(contact) {
   if (!contact || typeof contact !== "object") return null;
+
+  const incomingLookup =
+    typeof contact.lookupKey === "string" && contact.lookupKey.trim()
+      ? contact.lookupKey.trim()
+      : "";
+  const incomingId = typeof contact.id === "string" && contact.id.trim() ? contact.id.trim() : "";
 
   const methodValue =
     typeof contact.method === "string" ? contact.method.toLowerCase() : "";
@@ -876,6 +917,20 @@ function normalizeContact(contact) {
     : ContactMethod.NICKNAME;
 
   const normalized = { method };
+
+  if (typeof contact.username === "string" && contact.username.trim()) {
+    normalized.username = truncateText(contact.username.trim(), 80);
+  }
+
+  const accountId =
+    normalizeAccountId(contact.accountId) ||
+    normalizeAccountId(contact.userId) ||
+    extractAccountIdFromKey(incomingLookup) ||
+    extractAccountIdFromKey(incomingId);
+
+  if (accountId) {
+    normalized.accountId = accountId;
+  }
 
   if (typeof contact.displayName === "string" && contact.displayName.trim()) {
     normalized.displayName = truncateText(contact.displayName, 80);
@@ -938,21 +993,19 @@ function normalizeContact(contact) {
     return null;
   }
 
-  const incomingId =
-    typeof contact.id === "string" && contact.id.trim() ? contact.id.trim() : "";
-  const incomingLookup =
-    typeof contact.lookupKey === "string" && contact.lookupKey.trim()
-      ? contact.lookupKey.trim()
-      : "";
   const derivedLookup = buildContactLookupKey({ ...normalized, method });
   if (incomingLookup) {
     normalized.lookupKey = incomingLookup;
+  } else if (normalized.accountId) {
+    normalized.lookupKey = `account:${normalized.accountId}`;
   } else if (derivedLookup) {
     normalized.lookupKey = derivedLookup;
   }
 
   if (incomingId) {
     normalized.id = incomingId;
+  } else if (normalized.accountId) {
+    normalized.id = `account:${normalized.accountId}`;
   } else if (normalized.lookupKey) {
     normalized.id = normalized.lookupKey;
   } else {
@@ -1047,13 +1100,26 @@ function buildContactTooltip(contact) {
 function getContactKey(contact) {
   const normalized = normalizeContact(contact);
   if (!normalized) return "";
+  if (normalized.accountId) {
+    return `account:${normalized.accountId}`;
+  }
   return normalized.id || normalized.lookupKey || "";
+}
+
+function getContactAccountId(contact) {
+  const normalized = normalizeContact(contact);
+  if (!normalized) return null;
+  return normalized.accountId ?? null;
 }
 
 function contactsMatch(contactA, contactB) {
   const normalizedA = normalizeContact(contactA);
   const normalizedB = normalizeContact(contactB);
   if (!normalizedA || !normalizedB) return false;
+
+  if (normalizedA.accountId && normalizedB.accountId && normalizedA.accountId === normalizedB.accountId) {
+    return true;
+  }
 
   if (normalizedA.id && normalizedB.id && normalizedA.id === normalizedB.id) {
     return true;
@@ -2427,6 +2493,13 @@ function sendOutgoingMessageToServer(chat, message, text, attachments = []) {
     content,
     client_id: clientMessageId,
   };
+
+  if (chat.type === ChatType.DIRECT) {
+    const recipientAccountId = getContactAccountId(chat.contact);
+    if (recipientAccountId) {
+      payload.recipient_id = recipientAccountId;
+    }
+  }
 
   realtimeState.pendingChatJoins.add(normalizedChatId);
 
@@ -4679,6 +4752,75 @@ function resetNewContactForm() {
   resetContactLookup();
 }
 
+// When a user selects a nickname or email that matches an existing account we surface
+// via the lookup API, enrich the contact with the persisted account identifier so
+// outbound messages can be routed to the correct user sockets.
+function findAccountMatchForContact(contact) {
+  if (!contact || typeof contact !== "object") {
+    return null;
+  }
+  const results = Array.isArray(contactLookupState?.results) ? contactLookupState.results : [];
+  if (!results.length) {
+    return null;
+  }
+
+  const candidateKeys = new Set();
+  const addCandidate = (value) => {
+    if (typeof value !== "string") return;
+    const trimmed = value.trim().toLowerCase();
+    if (trimmed) {
+      candidateKeys.add(trimmed);
+    }
+  };
+
+  addCandidate(contact.nickname);
+  addCandidate(contact.displayName);
+  addCandidate(contact.email);
+
+  if (!candidateKeys.size) {
+    return null;
+  }
+
+  for (const entry of results) {
+    if (!entry) continue;
+    const username =
+      typeof entry.username === "string" && entry.username.trim() ? entry.username.trim() : "";
+    const normalizedUsername = username.toLowerCase();
+    if (!username || !candidateKeys.has(normalizedUsername)) {
+      continue;
+    }
+    const accountId = normalizeAccountId(entry.id ?? entry.userId ?? null);
+    if (!accountId) {
+      continue;
+    }
+    return { accountId, username };
+  }
+
+  return null;
+}
+
+function applyAccountMatchMetadata(contact) {
+  const match = findAccountMatchForContact(contact);
+  if (!match) {
+    return;
+  }
+
+  contact.accountId = match.accountId;
+  contact.username = match.username;
+  if (typeof contact.lookupKey !== "string" || !contact.lookupKey.trim()) {
+    contact.lookupKey = `account:${match.accountId}`;
+  }
+  if (typeof contact.id !== "string" || !contact.id.trim()) {
+    contact.id = contact.lookupKey;
+  }
+  if (typeof contact.displayName !== "string" || !contact.displayName.trim()) {
+    contact.displayName = match.username;
+  }
+  if (typeof contact.nickname !== "string" || !contact.nickname.trim()) {
+    contact.nickname = match.username;
+  }
+}
+
 function collectNewContactData({ strict = false, showErrors = false } = {}) {
   if (!newContactForm) return null;
   const method = getActiveNewContactMethod();
@@ -4806,6 +4948,8 @@ function collectNewContactData({ strict = false, showErrors = false } = {}) {
   if (typeof contact.notes === "string") {
     contact.notes = contact.notes.trim();
   }
+
+  applyAccountMatchMetadata(contact);
 
   const normalized = normalizeContact(contact);
   if (!normalized) {
