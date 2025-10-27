@@ -9,7 +9,137 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
 </head>
-<body>
+<body data-api-base="">
+  <div class="auth-overlay" id="auth-overlay" data-view="login" hidden aria-hidden="true">
+    <div class="auth-overlay__backdrop" aria-hidden="true"></div>
+    <div class="auth-overlay__dialog" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+      <div class="auth-overlay__header">
+        <div class="auth-overlay__intro">
+          <h1 class="auth-overlay__title" id="auth-title">Welcome back</h1>
+          <p class="auth-overlay__subtitle" id="auth-subtitle">Sign in to continue.</p>
+        </div>
+        <div class="auth-overlay__tabs" role="tablist" aria-label="Authentication method">
+          <button
+            type="button"
+            class="auth-tabs__tab auth-tabs__tab--active"
+            id="auth-tab-login"
+            role="tab"
+            aria-selected="true"
+            aria-controls="auth-login-form"
+            data-auth-target="login"
+            data-auth-tab
+            tabindex="0"
+          >
+            Log in
+          </button>
+          <button
+            type="button"
+            class="auth-tabs__tab"
+            id="auth-tab-signup"
+            role="tab"
+            aria-selected="false"
+            aria-controls="auth-signup-form"
+            data-auth-target="signup"
+            data-auth-tab
+            tabindex="-1"
+          >
+            Create account
+          </button>
+        </div>
+      </div>
+      <div class="auth-overlay__error" id="auth-error" role="alert" hidden></div>
+      <form class="auth-form" id="auth-login-form" role="tabpanel" aria-labelledby="auth-tab-login" tabindex="0" novalidate>
+        <label class="auth-form__field">
+          <span class="auth-form__label">Username</span>
+          <input
+            type="text"
+            name="username"
+            autocomplete="username"
+            required
+            inputmode="text"
+            placeholder="Enter your username"
+          />
+        </label>
+        <label class="auth-form__field">
+          <span class="auth-form__label">Password</span>
+          <input
+            type="password"
+            name="password"
+            autocomplete="current-password"
+            required
+            placeholder="Enter your password"
+          />
+        </label>
+        <button
+          type="submit"
+          class="auth-form__submit"
+          data-auth-submit="login"
+          data-default-label="Sign in"
+          data-loading-label="Signing in…"
+        >
+          Sign in
+        </button>
+      </form>
+      <form
+        class="auth-form"
+        id="auth-signup-form"
+        role="tabpanel"
+        aria-labelledby="auth-tab-signup"
+        tabindex="-1"
+        novalidate
+        hidden
+      >
+        <label class="auth-form__field">
+          <span class="auth-form__label">Username</span>
+          <input
+            type="text"
+            name="username"
+            autocomplete="username"
+            required
+            inputmode="text"
+            placeholder="Choose a username"
+          />
+        </label>
+        <label class="auth-form__field">
+          <span class="auth-form__label">Password</span>
+          <input
+            type="password"
+            name="password"
+            autocomplete="new-password"
+            required
+            minlength="6"
+            placeholder="Create a password"
+          />
+        </label>
+        <label class="auth-form__field">
+          <span class="auth-form__label">Confirm password</span>
+          <input
+            type="password"
+            name="confirm"
+            autocomplete="new-password"
+            required
+            minlength="6"
+            placeholder="Repeat your password"
+          />
+        </label>
+        <button
+          type="submit"
+          class="auth-form__submit"
+          data-auth-submit="signup"
+          data-default-label="Create account"
+          data-loading-label="Creating account…"
+        >
+          Create account
+        </button>
+      </form>
+      <div class="auth-overlay__footer">
+        <span id="auth-switch-message">Need an account?</span>
+        <button type="button" class="auth-overlay__switch" id="auth-switch" data-auth-target="signup">
+          Create one
+        </button>
+      </div>
+    </div>
+  </div>
   <div class="app" id="app">
     <aside class="sidebar">
       <header class="sidebar__header">
@@ -650,6 +780,15 @@
             </span>
           </label>
         </fieldset>
+        <div class="settings__section settings__section--account">
+          <div class="settings__legend settings__legend--subtle">Account</div>
+          <p class="settings__description" id="settings-account-description">
+            Sign out to switch to a different user.
+          </p>
+          <button type="button" class="settings__sign-out" id="sign-out-button">
+            Sign out
+          </button>
+        </div>
       </form>
     </div>
   </div>

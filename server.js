@@ -10,6 +10,19 @@ const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'development-secret-change-me';
 const MAX_CHAT_HISTORY = 50;
 
+// Derive the database name for diagnostics even when a single DATABASE_URL is used.
+const databaseFromUrl = (() => {
+  if (!process.env.DATABASE_URL) {
+    return null;
+  }
+  try {
+    const url = new URL(process.env.DATABASE_URL);
+    return url.pathname.replace(/^\//, '') || null;
+  } catch (error) {
+    return null;
+  }
+})();
+
 const poolConfig = process.env.DATABASE_URL
   ? {
       connectionString: process.env.DATABASE_URL,
@@ -23,10 +36,28 @@ const poolConfig = process.env.DATABASE_URL
       database: process.env.PGDATABASE || 'chat_app',
     };
 
+// Used for human-friendly error messages when the database cannot be reached.
+const resolvedDatabaseName =
+  poolConfig.database || databaseFromUrl || process.env.PGDATABASE || 'chat_app';
+
 const pool = new Pool(poolConfig);
 
 const app = express();
 app.use(express.json());
+
+// Allow the frontend (served from a different origin in local dev) to talk to the API.
+const allowedOrigin = process.env.CORS_ORIGIN || 'http://localhost:3000';
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', allowedOrigin);
+  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+
+  next();
+});
 
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -118,6 +149,66 @@ function verifyToken(token) {
   }
 }
 
+// Translate `pg` driver error codes into actionable API responses.
+function mapDatabaseError(error) {
+  if (!error || typeof error !== 'object') {
+    return null;
+  }
+
+  const code = error.code;
+  switch (code) {
+    case '28P01':
+      return {
+        status: 500,
+        message:
+          'Database authentication failed. Verify your PostgreSQL username and password (PGUSER/PGPASSWORD).',
+      };
+    case '3D000':
+      return {
+        status: 500,
+        message: `Database "${resolvedDatabaseName}" does not exist. Create it or update PGDATABASE.`,
+      };
+    case '57P03':
+      return {
+        status: 503,
+        message: 'Database is not ready to accept connections. Ensure PostgreSQL is running and retry.',
+      };
+    default:
+      break;
+  }
+
+  if (code === 'ECONNREFUSED') {
+    return {
+      status: 503,
+      message: 'Unable to reach PostgreSQL. Confirm the service is running and accessible at the configured host/port.',
+    };
+  }
+
+  if (code === 'ENOTFOUND') {
+    return {
+      status: 500,
+      message: 'PostgreSQL host could not be resolved. Check the PGHOST setting.',
+    };
+  }
+
+  if (code === 'ETIMEDOUT') {
+    return {
+      status: 503,
+      message: 'Timed out while connecting to PostgreSQL. Verify network connectivity and server health.',
+    };
+  }
+
+  return null;
+}
+
+function respondWithDatabaseError(res, error, fallbackMessage) {
+  const mapped = mapDatabaseError(error);
+  if (mapped) {
+    return res.status(mapped.status).json({ error: mapped.message });
+  }
+  return res.status(500).json({ error: fallbackMessage });
+}
+
 app.get('/', (_req, res) => {
   res.json({ status: 'ok' });
 });
@@ -136,10 +227,11 @@ app.post('/api/register', async (req, res) => {
     }
 
     const newUser = await createUser({ username, password });
-    res.status(201).json({ user: newUser });
+    const token = generateToken(newUser.id);
+    res.status(201).json({ token, user: newUser });
   } catch (error) {
     console.error('Error registering user', error);
-    res.status(500).json({ error: 'Failed to register user.' });
+    return respondWithDatabaseError(res, error, 'Failed to register user.');
   }
 });
 
@@ -171,7 +263,7 @@ app.post('/api/login', async (req, res) => {
     });
   } catch (error) {
     console.error('Error logging in', error);
-    res.status(500).json({ error: 'Failed to authenticate user.' });
+    return respondWithDatabaseError(res, error, 'Failed to authenticate user.');
   }
 });
 

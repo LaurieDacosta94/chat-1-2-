@@ -48,6 +48,8 @@ The script installs `node_modules` on first run and then serves the backend on p
    - Create a new **Static Site**.
    - Point it at this repository (or upload the build artifacts).
    - Use `index.html` as the publish directory root.
+3. If your frontend is served from a different origin than the API, set the `<body data-api-base="…">`
+   attribute in `index.html` to the backend URL (for example `https://your-backend.example.com`).
 
 ### Backend
 1. Install dependencies:
@@ -61,6 +63,15 @@ The script installs `node_modules` on first run and then serves the backend on p
    JWT_SECRET=super-secret-key
    CORS_ORIGIN=http://localhost:3000
    ```
+   If you prefer discrete variables instead of a single `DATABASE_URL`, the server understands the standard PostgreSQL settings:
+   ```env
+   PGHOST=localhost
+   PGPORT=5432
+   PGUSER=postgres
+   PGPASSWORD=postgres
+   PGDATABASE=chat_app
+   ```
+   > **Note:** The defaults assume a local PostgreSQL user named `postgres` with the password `postgres`. Update the values above to match your local credentials; otherwise the API will respond with errors such as “Database authentication failed. Verify your PostgreSQL username and password (PGUSER/PGPASSWORD).”
 3. Initialize the database using the SQL in [`db/schema.sql`](db/schema.sql).
 4. Start the server:
    ```bash
@@ -72,7 +83,7 @@ The script installs `node_modules` on first run and then serves the backend on p
 
 ### REST Endpoints
 - `POST /api/register` — Body: `{ "username": string, "password": string }`
-  - Hashes the password and stores a new user record.
+  - Hashes the password, stores a new user record, and returns `{ token, user }` on success.
 - `POST /api/login` — Body: `{ "username": string, "password": string }`
   - Validates credentials and returns `{ token, user }` on success.
 

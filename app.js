@@ -109,6 +109,18 @@ const callOverlayStatusElement = document.getElementById("call-overlay-status");
 const callOverlayControlButtons = Array.from(
   document.querySelectorAll("[data-call-control]")
 );
+const authOverlayElement = document.getElementById("auth-overlay");
+const authLoginForm = document.getElementById("auth-login-form");
+const authSignupForm = document.getElementById("auth-signup-form");
+const authErrorElement = document.getElementById("auth-error");
+const authSwitchButton = document.getElementById("auth-switch");
+const authTabButtons = Array.from(document.querySelectorAll("[data-auth-tab]"));
+const authSwitchElements = Array.from(document.querySelectorAll("[data-auth-target]"));
+const authSwitchMessageElement = document.getElementById("auth-switch-message");
+const authTitleElement = document.getElementById("auth-title");
+const authSubtitleElement = document.getElementById("auth-subtitle");
+const authSubmitButtons = Array.from(document.querySelectorAll("[data-auth-submit]"));
+const signOutButton = document.getElementById("sign-out-button");
 
 const chatItemTemplate = document.getElementById("chat-item-template");
 const messageTemplate = document.getElementById("message-template");
@@ -119,6 +131,27 @@ const THEME_STORAGE_KEY = "whatsapp-clone-theme";
 const WALLPAPER_STORAGE_KEY = "whatsapp-clone-wallpaper";
 const ATTACHMENT_DRAFTS_STORAGE_KEY = "whatsapp-clone-attachment-drafts-v1";
 const PROFILE_STORAGE_KEY = "whatsapp-clone-profile-v1";
+const AUTH_STORAGE_KEY = "whatsapp-clone-auth-v1";
+const apiBaseFromDataset =
+  typeof document !== "undefined" && document.body?.dataset?.apiBase
+    ? document.body.dataset.apiBase.trim()
+    : "";
+const API_BASE_URL = (() => {
+  /**
+   * Prefer an explicit `data-api-base` attribute when provided so deployments can
+   * point the static frontend at a remote API without editing the script.
+   */
+  if (apiBaseFromDataset) {
+    return apiBaseFromDataset.replace(/\/+$/, "");
+  }
+  if (window.location.protocol === "file:" || window.location.origin === "null") {
+    return "http://localhost:3001";
+  }
+  if (window.location.hostname === "localhost" && window.location.port === "3000") {
+    return "http://localhost:3001";
+  }
+  return window.location.origin.replace(/\/+$/, "");
+})();
 const MAX_COMPOSER_ATTACHMENTS = 6;
 
 const Theme = {
@@ -165,6 +198,11 @@ const CallType = {
   AUDIO: "audio",
   VIDEO: "video",
   PHONE: "phone",
+};
+
+const AuthView = {
+  LOGIN: "login",
+  SIGNUP: "signup",
 };
 
 const CALL_TYPE_LABELS = {
@@ -1314,6 +1352,77 @@ function saveProfile(profile) {
   localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profile));
 }
 
+function normalizeAuthState(value) {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+
+  const token = typeof value.token === "string" ? value.token.trim() : "";
+  if (!token) {
+    return null;
+  }
+
+  const rawUser = value.user;
+  if (typeof rawUser !== "object" || rawUser === null) {
+    return null;
+  }
+
+  const username = typeof rawUser.username === "string" ? rawUser.username.trim() : "";
+  if (!username) {
+    return null;
+  }
+
+  const rawId = rawUser.id;
+  let id = null;
+  if (typeof rawId === "number" && Number.isFinite(rawId)) {
+    id = rawId;
+  } else if (typeof rawId === "string" && rawId.trim()) {
+    const numericId = Number(rawId);
+    id = Number.isNaN(numericId) ? rawId.trim() : numericId;
+  }
+
+  return {
+    token,
+    user: {
+      id,
+      username,
+    },
+  };
+}
+
+function loadAuthState() {
+  try {
+    const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return normalizeAuthState(parsed);
+  } catch (error) {
+    console.error("Failed to load auth state", error);
+    return null;
+  }
+}
+
+function saveAuthState(state) {
+  const normalized = normalizeAuthState(state);
+  if (!normalized) {
+    clearAuthStateStorage();
+    return;
+  }
+  localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(normalized));
+}
+
+function clearAuthStateStorage() {
+  localStorage.removeItem(AUTH_STORAGE_KEY);
+}
+
+function getAuthToken() {
+  return typeof authState?.token === "string" ? authState.token : null;
+}
+
+function isAuthenticated() {
+  return Boolean(getAuthToken());
+}
+
 function getInitials(name = "") {
   const trimmed = name.trim();
   if (!trimmed) return "JT";
@@ -1368,6 +1477,431 @@ function updateProfileUI(profile = activeProfile) {
     profileButton.setAttribute("aria-label", `Open profile for ${nextProfile.name}`);
     profileButton.title = `${nextProfile.name}'s profile`;
   }
+}
+
+function applyAuthenticatedUserToProfile(auth, { persist = true } = {}) {
+  if (!auth || typeof auth !== "object") return;
+  const username = typeof auth.user?.username === "string" ? auth.user.username.trim() : "";
+  if (!username) return;
+
+  const nextProfile = {
+    ...defaultProfile,
+    ...activeProfile,
+    name: username,
+  };
+
+  activeProfile = nextProfile;
+  if (persist) {
+    saveProfile(activeProfile);
+  }
+  updateProfileUI(activeProfile);
+}
+
+function clearAuthError() {
+  if (!authErrorElement) return;
+  authErrorElement.textContent = "";
+  authErrorElement.hidden = true;
+}
+
+function showAuthError(message) {
+  if (!authErrorElement) return;
+  const text = typeof message === "string" && message.trim() ? message.trim() : "Something went wrong. Please try again.";
+  authErrorElement.textContent = text;
+  authErrorElement.hidden = false;
+}
+
+function setActiveAuthView(view, { focusFirstField = false } = {}) {
+  const nextView = view === AuthView.SIGNUP ? AuthView.SIGNUP : AuthView.LOGIN;
+  activeAuthView = nextView;
+
+  if (authOverlayElement) {
+    authOverlayElement.dataset.view = nextView;
+  }
+  if (authLoginForm) {
+    const loginVisible = nextView === AuthView.LOGIN;
+    authLoginForm.hidden = !loginVisible;
+    authLoginForm.setAttribute("aria-hidden", loginVisible ? "false" : "true");
+    authLoginForm.tabIndex = loginVisible ? 0 : -1;
+    authLoginForm.setAttribute("tabindex", loginVisible ? "0" : "-1");
+  }
+  if (authSignupForm) {
+    const signupVisible = nextView === AuthView.SIGNUP;
+    authSignupForm.hidden = !signupVisible;
+    authSignupForm.setAttribute("aria-hidden", signupVisible ? "false" : "true");
+    authSignupForm.tabIndex = signupVisible ? 0 : -1;
+    authSignupForm.setAttribute("tabindex", signupVisible ? "0" : "-1");
+  }
+  if (authTitleElement) {
+    authTitleElement.textContent =
+      nextView === AuthView.LOGIN ? "Welcome back" : "Create an account";
+  }
+  if (authSubtitleElement) {
+    authSubtitleElement.textContent =
+      nextView === AuthView.LOGIN
+        ? "Sign in to continue."
+        : "Create an account to start messaging.";
+  }
+  if (authSwitchMessageElement) {
+    authSwitchMessageElement.textContent =
+      nextView === AuthView.LOGIN ? "Need an account?" : "Already have an account?";
+  }
+  if (authSwitchButton) {
+    authSwitchButton.dataset.authTarget =
+      nextView === AuthView.LOGIN ? AuthView.SIGNUP : AuthView.LOGIN;
+    authSwitchButton.textContent =
+      nextView === AuthView.LOGIN ? "Create one" : "Back to sign in";
+  }
+
+  authTabButtons.forEach((button) => {
+    const target =
+      button.dataset.authTarget === AuthView.SIGNUP ? AuthView.SIGNUP : AuthView.LOGIN;
+    const isActive = target === nextView;
+    button.classList.toggle("auth-tabs__tab--active", isActive);
+    button.setAttribute("aria-selected", isActive ? "true" : "false");
+    button.setAttribute("tabindex", isActive ? "0" : "-1");
+  });
+
+  clearAuthError();
+
+  if (focusFirstField) {
+    const form = nextView === AuthView.LOGIN ? authLoginForm : authSignupForm;
+    const firstInput = form?.querySelector("input");
+    if (firstInput instanceof HTMLElement) {
+      firstInput.focus();
+    }
+  }
+}
+
+function setAuthLoading(isLoading, view = activeAuthView) {
+  const targetView = view === AuthView.SIGNUP ? AuthView.SIGNUP : AuthView.LOGIN;
+  const form = targetView === AuthView.LOGIN ? authLoginForm : authSignupForm;
+  const submitButton = authSubmitButtons.find(
+    (button) => button.dataset.authSubmit === targetView
+  );
+
+  if (submitButton) {
+    const defaultLabel = submitButton.dataset.defaultLabel || submitButton.textContent || "";
+    if (!submitButton.dataset.defaultLabel) {
+      submitButton.dataset.defaultLabel = defaultLabel;
+    }
+    const loadingLabel = submitButton.dataset.loadingLabel || "Working…";
+    submitButton.textContent = isLoading ? loadingLabel : submitButton.dataset.defaultLabel;
+    submitButton.disabled = isLoading;
+  }
+
+  if (form) {
+    Array.from(form.elements).forEach((element) => {
+      if (!(element instanceof HTMLElement)) return;
+      if (element === submitButton) return;
+      if ("disabled" in element) {
+        element.disabled = isLoading;
+      }
+    });
+  }
+}
+
+async function apiRequest(path, { method = "GET", body, includeAuth = true } = {}) {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  const url = `${API_BASE_URL}${normalizedPath}`;
+  const headers = { Accept: "application/json" };
+  const init = { method, headers };
+
+  if (body !== undefined) {
+    headers["Content-Type"] = "application/json";
+    init.body = JSON.stringify(body);
+  }
+
+  if (includeAuth) {
+    const token = getAuthToken();
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+  }
+
+  let response;
+  try {
+    response = await fetch(url, init);
+  } catch (error) {
+    throw new Error("Unable to reach the server. Please check your connection and try again.");
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  const isJson = contentType.includes("application/json");
+  let payload = null;
+
+  if (isJson) {
+    try {
+      payload = await response.json();
+    } catch (error) {
+      payload = null;
+    }
+  } else {
+    try {
+      payload = await response.text();
+    } catch (error) {
+      payload = null;
+    }
+  }
+
+  if (!response.ok) {
+    const message =
+      payload && typeof payload === "object" && payload !== null && "error" in payload
+        ? payload.error
+        : typeof payload === "string" && payload
+        ? payload
+        : `Request failed with status ${response.status}`;
+    throw new Error(message);
+  }
+
+  return payload ?? {};
+}
+
+function updateAuthUI() {
+  const authenticated = isAuthenticated();
+
+  if (authOverlayElement) {
+    authOverlayElement.hidden = authenticated;
+    authOverlayElement.setAttribute("aria-hidden", authenticated ? "true" : "false");
+  }
+
+  if (document.body) {
+    document.body.classList.toggle("auth-locked", !authenticated);
+  }
+
+  if (signOutButton) {
+    if (authenticated) {
+      signOutButton.disabled = false;
+      signOutButton.removeAttribute("aria-disabled");
+    } else {
+      signOutButton.disabled = true;
+      signOutButton.setAttribute("aria-disabled", "true");
+    }
+  }
+
+  if (authenticated) {
+    clearAuthError();
+    return;
+  }
+
+  const activeForm = activeAuthView === AuthView.SIGNUP ? authSignupForm : authLoginForm;
+  const firstInput = activeForm?.querySelector("input");
+  if (firstInput instanceof HTMLElement && document.activeElement !== firstInput) {
+    firstInput.focus();
+  }
+}
+
+function setAuthState(nextState) {
+  const normalized = normalizeAuthState(nextState);
+  if (!normalized) {
+    authState = null;
+    clearAuthStateStorage();
+    setActiveAuthView(AuthView.LOGIN);
+    updateAuthUI();
+    return;
+  }
+
+  authState = normalized;
+  saveAuthState(authState);
+  applyAuthenticatedUserToProfile(authState);
+  updateAuthUI();
+}
+
+function handleAuthSwitch(event) {
+  if (!(event?.currentTarget instanceof HTMLElement)) {
+    return;
+  }
+  const targetView = event.currentTarget.dataset.authTarget === AuthView.SIGNUP
+    ? AuthView.SIGNUP
+    : AuthView.LOGIN;
+  setActiveAuthView(targetView, { focusFirstField: true });
+}
+
+function handleAuthTabKeydown(event) {
+  if (!(event?.currentTarget instanceof HTMLElement)) {
+    return;
+  }
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+    return;
+  }
+
+  event.preventDefault();
+  const currentIndex = authTabButtons.indexOf(event.currentTarget);
+  if (currentIndex === -1) {
+    return;
+  }
+
+  const direction = event.key === "ArrowLeft" ? -1 : 1;
+  const total = authTabButtons.length;
+  if (total === 0) {
+    return;
+  }
+
+  const nextIndex = (currentIndex + direction + total) % total;
+  const nextButton = authTabButtons[nextIndex];
+  if (nextButton instanceof HTMLElement) {
+    nextButton.focus();
+    nextButton.click();
+  }
+}
+
+async function handleLoginSubmit(event) {
+  event.preventDefault();
+  if (!authLoginForm) return;
+
+  const formData = new FormData(authLoginForm);
+  const username = (formData.get("username") ?? "").toString().trim();
+  const password = (formData.get("password") ?? "").toString();
+
+  if (!username || !password) {
+    showAuthError("Enter both a username and password.");
+    return;
+  }
+
+  clearAuthError();
+  setAuthLoading(true, AuthView.LOGIN);
+
+  try {
+    const payload = await apiRequest("/api/login", {
+      method: "POST",
+      body: { username, password },
+      includeAuth: false,
+    });
+
+    if (!payload || typeof payload !== "object" || !payload.token) {
+      throw new Error("Unexpected response from the server.");
+    }
+
+    setAuthState(payload);
+    authLoginForm.reset();
+    showToast(`Signed in as ${payload.user?.username ?? username}`);
+  } catch (error) {
+    console.error("Failed to sign in", error);
+    const message = error instanceof Error ? error.message : "Failed to sign in.";
+    showAuthError(message);
+  } finally {
+    setAuthLoading(false, AuthView.LOGIN);
+  }
+}
+
+async function handleSignupSubmit(event) {
+  event.preventDefault();
+  if (!authSignupForm) return;
+
+  const formData = new FormData(authSignupForm);
+  const username = (formData.get("username") ?? "").toString().trim();
+  const password = (formData.get("password") ?? "").toString();
+  const confirm = (formData.get("confirm") ?? "").toString();
+
+  if (!username || !password || !confirm) {
+    showAuthError("All fields are required.");
+    return;
+  }
+
+  if (password.length < 6) {
+    showAuthError("Password must be at least 6 characters long.");
+    return;
+  }
+
+  if (password !== confirm) {
+    showAuthError("Passwords do not match.");
+    return;
+  }
+
+  clearAuthError();
+  setAuthLoading(true, AuthView.SIGNUP);
+
+  try {
+    const payload = await apiRequest("/api/register", {
+      method: "POST",
+      body: { username, password },
+      includeAuth: false,
+    });
+
+    if (!payload || typeof payload !== "object" || !payload.token) {
+      throw new Error("Unexpected response from the server.");
+    }
+
+    setAuthState(payload);
+    authSignupForm.reset();
+    showToast(`Welcome, ${payload.user?.username ?? username}!`);
+  } catch (error) {
+    console.error("Failed to sign up", error);
+    const message = error instanceof Error ? error.message : "Failed to create account.";
+    showAuthError(message);
+  } finally {
+    setAuthLoading(false, AuthView.SIGNUP);
+  }
+}
+
+function resetAppDataToDefaults() {
+  clearPendingAttachments();
+  localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(DRAFTS_STORAGE_KEY);
+  localStorage.removeItem(ATTACHMENT_DRAFTS_STORAGE_KEY);
+  localStorage.removeItem(PROFILE_STORAGE_KEY);
+
+  chats = loadState();
+  drafts = loadDrafts();
+  attachmentDrafts = loadAttachmentDrafts();
+  activeProfile = loadProfile();
+  updateProfileUI(activeProfile);
+
+  pendingAttachments = [];
+  activeChatId = null;
+  activeFilter = Filter.ALL;
+  if (chatSearchInput) {
+    chatSearchInput.value = "";
+  }
+
+  updateFilterChips();
+  renderChats();
+  renderChatView(null);
+  renderComposerAttachments();
+  resumePendingStatuses();
+
+  if (settingsModal && !settingsModal.hidden) {
+    closeSettings({ restoreFocus: false });
+  }
+  if (profileModal && !profileModal.hidden) {
+    closeProfile();
+  }
+  if (newContactModal && !newContactModal.hidden) {
+    closeNewContactModal();
+  }
+  if (callPlanModal && !callPlanModal.hidden) {
+    closeCallPlanModal();
+  }
+  if (callOverlayElement && !callOverlayElement.hidden) {
+    endActiveCall({ reason: "Signed out" });
+  }
+}
+
+function handleSignOut() {
+  setAuthState(null);
+  resetAppDataToDefaults();
+  showToast("Signed out");
+}
+
+function initializeAuthUI() {
+  setActiveAuthView(activeAuthView);
+
+  authSwitchElements.forEach((element) => {
+    element.addEventListener("click", handleAuthSwitch);
+  });
+  authTabButtons.forEach((button) => {
+    button.addEventListener("keydown", handleAuthTabKeydown);
+  });
+  if (authLoginForm) {
+    authLoginForm.addEventListener("submit", handleLoginSubmit);
+  }
+  if (authSignupForm) {
+    authSignupForm.addEventListener("submit", handleSignupSubmit);
+  }
+  if (signOutButton) {
+    signOutButton.addEventListener("click", handleSignOut);
+  }
+
+  updateAuthUI();
 }
 
 function openProfile() {
@@ -1700,10 +2234,14 @@ function resumePendingStatuses() {
   }
 }
 
+let authState = loadAuthState();
 let chats = loadState();
 let drafts = loadDrafts();
 let attachmentDrafts = loadAttachmentDrafts();
 let activeProfile = loadProfile();
+if (authState) {
+  applyAuthenticatedUserToProfile(authState, { persist: false });
+}
 let activeTheme = loadTheme();
 let activeWallpaper = loadWallpaper();
 let activeChatId = null;
@@ -1712,6 +2250,7 @@ let settingsRestoreFocusTo = null;
 let profileRestoreFocusTo = null;
 let newContactRestoreFocusTo = null;
 let pendingAttachments = [];
+let activeAuthView = AuthView.LOGIN;
 
 function getActiveChat() {
   return chats.find((chat) => chat.id === activeChatId) ?? null;
@@ -3994,6 +4533,7 @@ function hydrate() {
   renderChatView(null);
   resumePendingStatuses();
   buildEmojiPicker();
+  initializeAuthUI();
 
   resetVoiceRecorder();
   if (callTimerInterval) {
@@ -4313,6 +4853,20 @@ function hydrate() {
     if (settingsModal && !settingsModal.hidden) {
       closeSettings();
     }
+  });
+
+  window.addEventListener("storage", (event) => {
+    if (event.key !== AUTH_STORAGE_KEY) return;
+    authState = loadAuthState();
+    if (authState) {
+      applyAuthenticatedUserToProfile(authState);
+      updateAuthUI();
+      return;
+    }
+
+    resetAppDataToDefaults();
+    setActiveAuthView(AuthView.LOGIN);
+    updateAuthUI();
   });
 
   window.addEventListener("resize", () => {
