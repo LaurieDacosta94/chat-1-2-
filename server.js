@@ -10,6 +10,14 @@ const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'development-secret-change-me';
 const MAX_CHAT_HISTORY = 50;
 
+const devAdminEnvFlag = process.env.ENABLE_DEV_ADMIN;
+const devAdminEnabled =
+  devAdminEnvFlag === 'true' ||
+  (devAdminEnvFlag !== 'false' && process.env.NODE_ENV !== 'production');
+const devAdminUsername = (process.env.DEV_ADMIN_USERNAME || 'admin').trim();
+const devAdminPassword = process.env.DEV_ADMIN_PASSWORD || 'admin-dev-password-change-me';
+let hasLoggedDevAdminHint = false;
+
 // When PostgreSQL is unavailable (for example, due to missing credentials on a
 // local machine), we fall back to a lightweight in-memory store so developers
 // can still sign up, log in, and exchange messages. Data stored this way is
@@ -68,10 +76,11 @@ function createInMemoryStore() {
   let nextUserId = 1;
   let nextMessageId = 1;
   const usersByUsername = new Map();
+  const usersById = new Map();
   const messagesByChatId = new Map();
 
   return {
-    insertUser({ username, passwordHash }) {
+    insertUser({ username, passwordHash, isAdmin = false }) {
       const createdAt = new Date().toISOString();
       if (usersByUsername.has(username)) {
         const error = new Error('Username is already taken.');
@@ -82,13 +91,24 @@ function createInMemoryStore() {
         id: nextUserId++,
         username,
         password_hash: passwordHash,
+        is_admin: Boolean(isAdmin),
         created_at: createdAt,
       };
       usersByUsername.set(username, record);
-      return { id: record.id, username: record.username };
+      usersById.set(record.id, record);
+      return {
+        id: record.id,
+        username: record.username,
+        is_admin: record.is_admin,
+        created_at: record.created_at,
+      };
     },
     findUser(username) {
       const record = usersByUsername.get(username);
+      return record ? { ...record } : null;
+    },
+    findUserById(userId) {
+      const record = usersById.get(userId);
       return record ? { ...record } : null;
     },
     searchUsers(query, limit = 5) {
@@ -104,10 +124,44 @@ function createInMemoryStore() {
           break;
         }
         if (record.username.toLowerCase().includes(normalizedQuery)) {
-          results.push({ id: record.id, username: record.username });
+          results.push({
+            id: record.id,
+            username: record.username,
+            is_admin: record.is_admin,
+            created_at: record.created_at,
+          });
         }
       }
       return results;
+    },
+    getAllUsers() {
+      return Array.from(usersByUsername.values())
+        .map((record) => ({ ...record }))
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    },
+    updateUser(userId, { passwordHash, isAdmin }) {
+      const record = usersById.get(userId);
+      if (!record) {
+        return null;
+      }
+      if (typeof passwordHash === 'string' && passwordHash) {
+        record.password_hash = passwordHash;
+      }
+      if (typeof isAdmin === 'boolean') {
+        record.is_admin = isAdmin;
+      }
+      usersByUsername.set(record.username, record);
+      usersById.set(record.id, record);
+      return { ...record };
+    },
+    deleteUser(userId) {
+      const record = usersById.get(userId);
+      if (!record || record.is_admin) {
+        return false;
+      }
+      usersById.delete(userId);
+      usersByUsername.delete(record.username);
+      return true;
     },
     insertMessage({ chatId, senderId, content }) {
       const timestamp = new Date().toISOString();
@@ -132,6 +186,19 @@ function createInMemoryStore() {
       const normalizedLimit = Number.isFinite(limit) && limit > 0 ? limit : messages.length;
       const startIndex = Math.max(messages.length - normalizedLimit, 0);
       return messages.slice(startIndex).map((message) => ({ ...message }));
+    },
+    purgeDatabase({ removeUsers = false } = {}) {
+      messagesByChatId.clear();
+      if (!removeUsers) {
+        return;
+      }
+      for (const [userId, record] of usersById.entries()) {
+        if (record.is_admin) {
+          continue;
+        }
+        usersById.delete(userId);
+        usersByUsername.delete(record.username);
+      }
     },
   };
 }
@@ -178,6 +245,10 @@ function enableInMemoryFallback(error) {
     pool.end().catch(() => {});
     pool = null;
   }
+
+  ensureDevAdminAccount().catch((seedError) => {
+    console.error('Failed to provision dev admin account for in-memory store', seedError);
+  });
 
   return true;
 }
@@ -267,24 +338,24 @@ function removeSocketForUser(userId, socketId) {
   }
 }
 
-async function createUser({ username, password }) {
+async function createUser({ username, password, isAdmin = false }) {
   const hashedPassword = await bcrypt.hash(password, 12);
 
   if (useInMemoryStore || !pool) {
-    return inMemoryStore.insertUser({ username, passwordHash: hashedPassword });
+    return inMemoryStore.insertUser({ username, passwordHash: hashedPassword, isAdmin });
   }
 
   try {
     const result = await pool.query(
-      `INSERT INTO users (username, password_hash)
-       VALUES ($1, $2)
-       RETURNING id, username`,
-      [username, hashedPassword]
+      `INSERT INTO users (username, password_hash, is_admin)
+       VALUES ($1, $2, $3)
+       RETURNING id, username, is_admin, created_at`,
+      [username, hashedPassword, isAdmin]
     );
     return result.rows[0];
   } catch (error) {
     if (enableInMemoryFallback(error)) {
-      return inMemoryStore.insertUser({ username, passwordHash: hashedPassword });
+      return inMemoryStore.insertUser({ username, passwordHash: hashedPassword, isAdmin });
     }
     throw error;
   }
@@ -297,7 +368,7 @@ async function findUserByUsername(username) {
 
   try {
     const result = await pool.query(
-      `SELECT id, username, password_hash
+      `SELECT id, username, password_hash, is_admin, created_at
        FROM users
        WHERE username = $1`,
       [username]
@@ -306,6 +377,27 @@ async function findUserByUsername(username) {
   } catch (error) {
     if (enableInMemoryFallback(error)) {
       return inMemoryStore.findUser(username);
+    }
+    throw error;
+  }
+}
+
+async function findUserById(userId) {
+  if (useInMemoryStore || !pool) {
+    return inMemoryStore.findUserById(userId);
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT id, username, password_hash, is_admin, created_at
+       FROM users
+       WHERE id = $1`,
+      [userId]
+    );
+    return result.rows[0] || null;
+  } catch (error) {
+    if (enableInMemoryFallback(error)) {
+      return inMemoryStore.findUserById(userId);
     }
     throw error;
   }
@@ -320,7 +412,7 @@ async function searchUsers(query, limit = 5) {
 
   try {
     const result = await pool.query(
-      `SELECT id, username
+      `SELECT id, username, is_admin, created_at
        FROM users
        WHERE username ILIKE $1
        ORDER BY username ASC
@@ -361,6 +453,125 @@ async function saveMessage({ chatId, senderId, content }) {
   }
 }
 
+async function listUsers() {
+  if (useInMemoryStore || !pool) {
+    return inMemoryStore.getAllUsers();
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT id, username, is_admin, created_at
+       FROM users
+       ORDER BY created_at DESC`
+    );
+    return result.rows;
+  } catch (error) {
+    if (enableInMemoryFallback(error)) {
+      return inMemoryStore.getAllUsers();
+    }
+    throw error;
+  }
+}
+
+async function deleteUserById(userId) {
+  if (useInMemoryStore || !pool) {
+    return inMemoryStore.deleteUser(userId);
+  }
+
+  try {
+    const result = await pool.query(
+      `DELETE FROM users
+       WHERE id = $1 AND is_admin = FALSE`,
+      [userId]
+    );
+    return result.rowCount > 0;
+  } catch (error) {
+    if (enableInMemoryFallback(error)) {
+      return inMemoryStore.deleteUser(userId);
+    }
+    throw error;
+  }
+}
+
+async function purgeDatabase({ removeUsers = false } = {}) {
+  if (useInMemoryStore || !pool) {
+    inMemoryStore.purgeDatabase({ removeUsers });
+    return { messagesDeleted: null, usersDeleted: null };
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const messageResult = await client.query('DELETE FROM messages');
+    let userResult = { rowCount: 0 };
+    if (removeUsers) {
+      userResult = await client.query(
+        `DELETE FROM users
+         WHERE is_admin = FALSE`
+      );
+    }
+    await client.query('COMMIT');
+    return { messagesDeleted: messageResult.rowCount, usersDeleted: userResult.rowCount };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    if (enableInMemoryFallback(error)) {
+      inMemoryStore.purgeDatabase({ removeUsers });
+      return { messagesDeleted: null, usersDeleted: null };
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function ensureDevAdminAccount() {
+  if (!devAdminEnabled) {
+    return;
+  }
+
+  const username = devAdminUsername;
+  const password = devAdminPassword;
+
+  if (!username || !password) {
+    return;
+  }
+
+  try {
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    if (useInMemoryStore || !pool) {
+      const existing = inMemoryStore.findUser(username);
+      if (!existing) {
+        inMemoryStore.insertUser({ username, passwordHash, isAdmin: true });
+      } else {
+        inMemoryStore.updateUser(existing.id, { passwordHash, isAdmin: true });
+      }
+    } else {
+      await pool.query(
+        `INSERT INTO users (username, password_hash, is_admin)
+         VALUES ($1, $2, TRUE)
+         ON CONFLICT (username) DO UPDATE
+           SET password_hash = EXCLUDED.password_hash,
+               is_admin = TRUE`,
+        [username, passwordHash]
+      );
+    }
+
+    if (!hasLoggedDevAdminHint) {
+      hasLoggedDevAdminHint = true;
+      console.info(
+        `⚙️  Dev admin account ready for local testing → ${username}/${password}. Set ENABLE_DEV_ADMIN=false to disable. ` +
+          'Never enable this helper account in production.'
+      );
+    }
+  } catch (error) {
+    if (enableInMemoryFallback(error)) {
+      return ensureDevAdminAccount();
+    }
+    console.error('Failed to provision dev admin account', error);
+  }
+}
+
 function extractTokenFromHeader(req) {
   const header = typeof req.headers.authorization === 'string' ? req.headers.authorization.trim() : '';
   if (!header || !header.toLowerCase().startsWith('bearer ')) {
@@ -383,7 +594,29 @@ function requireHttpAuth(req, res) {
     return null;
   }
 
-  return payload.userId;
+  return { userId: payload.userId, isAdmin: Boolean(payload.isAdmin) };
+}
+
+async function requireAdminUser(req, res) {
+  const auth = requireHttpAuth(req, res);
+  if (!auth) {
+    return null;
+  }
+
+  try {
+    const user = await findUserById(auth.userId);
+    if (!user || !user.is_admin) {
+      res.status(403).json({ error: 'Admin privileges required.' });
+      return null;
+    }
+
+    const { password_hash: _ignored, ...safeUser } = user;
+    return { auth, user: safeUser };
+  } catch (error) {
+    console.error('Failed to verify admin privileges', error);
+    res.status(500).json({ error: 'Failed to verify admin privileges.' });
+    return null;
+  }
 }
 
 async function fetchRecentMessages(chatId, limit = MAX_CHAT_HISTORY) {
@@ -414,8 +647,8 @@ async function fetchRecentMessages(chatId, limit = MAX_CHAT_HISTORY) {
   }
 }
 
-function generateToken(userId) {
-  return jwt.sign({ userId }, JWT_SECRET, { expiresIn: '7d' });
+function generateToken(userId, isAdmin = false) {
+  return jwt.sign({ userId, isAdmin: Boolean(isAdmin) }, JWT_SECRET, { expiresIn: '7d' });
 }
 
 function verifyToken(token) {
@@ -444,8 +677,15 @@ app.post('/api/register', async (req, res) => {
     }
 
     const newUser = await createUser({ username, password });
-    const token = generateToken(newUser.id);
-    res.status(201).json({ token, user: newUser });
+    const token = generateToken(newUser.id, newUser.is_admin);
+    res.status(201).json({
+      token,
+      user: {
+        id: newUser.id,
+        username: newUser.username,
+        is_admin: Boolean(newUser.is_admin),
+      },
+    });
   } catch (error) {
     console.error('Error registering user', error);
     res.status(500).json({ error: 'Failed to register user.' });
@@ -470,12 +710,13 @@ app.post('/api/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials.' });
     }
 
-    const token = generateToken(user.id);
+    const token = generateToken(user.id, user.is_admin);
     res.json({
       token,
       user: {
         id: user.id,
         username: user.username,
+        is_admin: Boolean(user.is_admin),
       },
     });
   } catch (error) {
@@ -484,11 +725,102 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-app.get('/api/users/search', async (req, res) => {
-  const userId = requireHttpAuth(req, res);
-  if (!userId) {
+app.get('/api/admin/users', async (req, res) => {
+  const admin = await requireAdminUser(req, res);
+  if (!admin) {
     return;
   }
+
+  try {
+    const users = await listUsers();
+    res.json({
+      users: users.map((user) => ({
+        id: user.id,
+        username: user.username,
+        is_admin: Boolean(user.is_admin),
+        created_at:
+          user && typeof user.created_at === 'string'
+            ? user.created_at
+            : user?.created_at instanceof Date
+            ? user.created_at.toISOString()
+            : null,
+      })),
+    });
+  } catch (error) {
+    console.error('Error listing users for admin dashboard', error);
+    res.status(500).json({ error: 'Failed to list users.' });
+  }
+});
+
+app.delete('/api/admin/users/:id', async (req, res) => {
+  const admin = await requireAdminUser(req, res);
+  if (!admin) {
+    return;
+  }
+
+  const userId = Number.parseInt(req.params.id, 10);
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ error: 'A valid user id is required.' });
+  }
+
+  if (userId === admin.user.id) {
+    return res.status(400).json({ error: 'You cannot delete your own account.' });
+  }
+
+  try {
+    const targetUser = await findUserById(userId);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+    if (targetUser.is_admin) {
+      return res.status(400).json({ error: 'Cannot delete admin accounts.' });
+    }
+
+    const deleted = await deleteUserById(userId);
+    if (!deleted) {
+      return res.status(409).json({ error: 'Unable to delete user.' });
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting user from admin dashboard', error);
+    res.status(500).json({ error: 'Failed to delete user.' });
+  }
+});
+
+app.post('/api/admin/purge', async (req, res) => {
+  const admin = await requireAdminUser(req, res);
+  if (!admin) {
+    return;
+  }
+
+  const removeUsers = Boolean(req.body?.removeUsers);
+
+  try {
+    const result = await purgeDatabase({ removeUsers });
+    res.json({
+      success: true,
+      removed: {
+        messages: result.messagesDeleted,
+        users: removeUsers ? result.usersDeleted : 0,
+      },
+    });
+  } catch (error) {
+    console.error('Error purging data from admin dashboard', error);
+    res.status(500).json({ error: 'Failed to purge data.' });
+  }
+});
+
+ensureDevAdminAccount().catch((error) => {
+  console.error('Failed to provision dev admin account during startup', error);
+});
+
+app.get('/api/users/search', async (req, res) => {
+  const auth = requireHttpAuth(req, res);
+  if (!auth) {
+    return;
+  }
+  const { userId } = auth;
 
   const query = typeof req.query.query === 'string' ? req.query.query.trim() : '';
   const limitRaw = typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : undefined;
