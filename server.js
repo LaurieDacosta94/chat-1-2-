@@ -320,21 +320,92 @@ const io = new Server(server, {
   },
 });
 
-const userSocketMap = new Map(); // userId -> Set(socketId)
+// We normalize user identifiers to strings so that sockets looked up via
+// JWT payloads (numbers) and event payloads (often strings) refer to the same
+// entry. Without this, direct message delivery could fail because `Set`
+// lookups treat `1` and `'1'` as different keys.
+const userSocketMap = new Map(); // normalizedUserId -> Set(socketId)
+
+function normalizeUserId(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === 'bigint') {
+    return value.toString();
+  }
+  if (typeof value === 'string' && value.trim()) {
+    return value.trim();
+  }
+  return null;
+}
+
+// Clients occasionally send `recipient_ids` as a serialized string (comma-separated
+// or JSON). We coerce those payloads into a consistent set of normalized user IDs
+// so that direct message forwarding works regardless of the input shape.
+function collectNormalizedRecipientIds({ recipientId, recipientIds }) {
+  const recipients = new Set();
+
+  const addCandidate = (candidate) => {
+    const normalized = normalizeUserId(candidate);
+    if (normalized) {
+      recipients.add(normalized);
+    }
+  };
+
+  if (Array.isArray(recipientIds)) {
+    recipientIds.forEach(addCandidate);
+  } else if (typeof recipientIds === 'string') {
+    const trimmed = recipientIds.trim();
+    if (trimmed) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) {
+          parsed.forEach(addCandidate);
+        } else {
+          addCandidate(parsed);
+        }
+      } catch (_error) {
+        trimmed
+          .split(',')
+          .map((value) => value.trim())
+          .filter(Boolean)
+          .forEach(addCandidate);
+      }
+    }
+  } else if (recipientIds !== undefined && recipientIds !== null) {
+    addCandidate(recipientIds);
+  }
+
+  if (recipientId !== undefined) {
+    addCandidate(recipientId);
+  }
+
+  return recipients;
+}
 
 function addSocketForUser(userId, socketId) {
-  if (!userSocketMap.has(userId)) {
-    userSocketMap.set(userId, new Set());
+  const normalizedUserId = normalizeUserId(userId);
+  if (!normalizedUserId) {
+    return;
   }
-  userSocketMap.get(userId).add(socketId);
+
+  if (!userSocketMap.has(normalizedUserId)) {
+    userSocketMap.set(normalizedUserId, new Set());
+  }
+  userSocketMap.get(normalizedUserId).add(socketId);
 }
 
 function removeSocketForUser(userId, socketId) {
-  const sockets = userSocketMap.get(userId);
+  const normalizedUserId = normalizeUserId(userId);
+  if (!normalizedUserId) {
+    return;
+  }
+
+  const sockets = userSocketMap.get(normalizedUserId);
   if (!sockets) return;
   sockets.delete(socketId);
   if (sockets.size === 0) {
-    userSocketMap.delete(userId);
+    userSocketMap.delete(normalizedUserId);
   }
 }
 
@@ -896,14 +967,11 @@ io.on('connection', (socket) => {
       const payload = { ...message, chat_id: chatId };
       io.to(chatId).emit('message', payload);
 
-      const recipients = new Set();
-      if (Array.isArray(recipientIds)) {
-        recipientIds.forEach((id) => recipients.add(id));
+      const normalizedSenderId = normalizeUserId(authenticatedUserId);
+      const recipients = collectNormalizedRecipientIds({ recipientId, recipientIds });
+      if (normalizedSenderId) {
+        recipients.delete(normalizedSenderId);
       }
-      if (recipientId) {
-        recipients.add(recipientId);
-      }
-      recipients.delete(authenticatedUserId);
 
       recipients.forEach((userId) => {
         const sockets = userSocketMap.get(userId);
