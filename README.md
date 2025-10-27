@@ -114,7 +114,8 @@ Run the file against your Render PostgreSQL instance to set up the tables and in
 
 For quick local resets there is a lightweight admin console at [`admin.html`](admin.html).
 Open the file in a browser (or serve it alongside the main frontend) and sign in with the
-development admin account:
+development admin account. By default it targets `http://localhost:3001`; change the
+`data-api-base` attribute on the `<body>` element to point at a different backend when needed.
 
 - **Default credentials:** `admin` / `admin-dev-password-change-me`
 - **Custom credentials:** set `DEV_ADMIN_USERNAME` and `DEV_ADMIN_PASSWORD`
