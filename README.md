@@ -48,6 +48,8 @@ The script installs `node_modules` on first run and then serves the backend on p
    - Create a new **Static Site**.
    - Point it at this repository (or upload the build artifacts).
    - Use `index.html` as the publish directory root.
+3. If your frontend is served from a different origin than the API, set the `<body data-api-base="…">`
+   attribute in `index.html` to the backend URL (for example `https://your-backend.example.com`).
 
 ### Backend
 1. Install dependencies:
@@ -72,7 +74,7 @@ The script installs `node_modules` on first run and then serves the backend on p
 
 ### REST Endpoints
 - `POST /api/register` — Body: `{ "username": string, "password": string }`
-  - Hashes the password and stores a new user record.
+  - Hashes the password, stores a new user record, and returns `{ token, user }` on success.
 - `POST /api/login` — Body: `{ "username": string, "password": string }`
   - Validates credentials and returns `{ token, user }` on success.
 

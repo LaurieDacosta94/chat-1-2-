@@ -136,7 +136,8 @@ app.post('/api/register', async (req, res) => {
     }
 
     const newUser = await createUser({ username, password });
-    res.status(201).json({ user: newUser });
+    const token = generateToken(newUser.id);
+    res.status(201).json({ token, user: newUser });
   } catch (error) {
     console.error('Error registering user', error);
     res.status(500).json({ error: 'Failed to register user.' });
