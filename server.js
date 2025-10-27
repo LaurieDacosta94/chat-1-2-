@@ -167,10 +167,12 @@ function createInMemoryStore() {
     },
     insertMessage({ chatId, senderId, content }) {
       const timestamp = new Date().toISOString();
+      const sender = senderId ? usersById.get(senderId) : null;
       const record = {
         id: nextMessageId++,
         chat_id: chatId,
         sender_id: senderId,
+        sender_username: sender ? sender.username : null,
         content,
         timestamp,
       };
@@ -766,11 +768,17 @@ async function fetchRecentMessages(chatId, limit = MAX_CHAT_HISTORY) {
 
   try {
     const result = await pool.query(
-      `SELECT id, chat_id, sender_id, content, timestamp
-       FROM messages
-       WHERE chat_id = $1
-       ORDER BY timestamp DESC
-       LIMIT $2`,
+      `SELECT m.id,
+              m.chat_id,
+              m.sender_id,
+              u.username AS sender_username,
+              m.content,
+              m.timestamp
+         FROM messages m
+         LEFT JOIN users u ON m.sender_id = u.id
+        WHERE m.chat_id = $1
+        ORDER BY m.timestamp DESC
+        LIMIT $2`,
       [chatId, limit]
     );
     return result.rows
@@ -1063,65 +1071,81 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('sendMessage', async ({ chat_id: chatId, content, recipient_id: recipientId, recipient_ids: recipientIds }) => {
-    if (!authenticatedUserId) {
-      socket.emit('authError', { error: 'Authenticate before sending messages.' });
-      return;
-    }
-    if (!chatId || !content) {
-      socket.emit('messageError', { error: 'chat_id and content are required.' });
-      return;
-    }
+  socket.on(
+    'sendMessage',
+    async ({
+      chat_id: chatId,
+      content,
+      recipient_id: recipientId,
+      recipient_ids: recipientIds,
+      client_id: clientMessageId,
+    }) => {
+      if (!authenticatedUserId) {
+        socket.emit('authError', { error: 'Authenticate before sending messages.' });
+        return;
+      }
+      if (!chatId || !content) {
+        socket.emit('messageError', { error: 'chat_id and content are required.' });
+        return;
+      }
 
-    try {
-      const message = await saveMessage({ chatId, senderId: authenticatedUserId, content });
-      const payload = { ...message, chat_id: chatId };
-      io.to(chatId).emit('message', payload);
-
-      let senderUsername = null;
       try {
-        const sender = await findUserById(authenticatedUserId);
-        senderUsername = sender?.username || null;
-      } catch (_lookupError) {
-        senderUsername = null;
-      }
+        let senderUsername = null;
+        try {
+          const sender = await findUserById(authenticatedUserId);
+          senderUsername = sender?.username || null;
+        } catch (_lookupError) {
+          senderUsername = null;
+        }
 
-      const preview =
-        typeof content === 'string'
-          ? content.trim().replace(/\s+/g, ' ').slice(0, 140)
-          : '';
+        const message = await saveMessage({ chatId, senderId: authenticatedUserId, content });
+        const payload = { ...message, chat_id: chatId };
+        if (senderUsername && !payload.sender_username) {
+          payload.sender_username = senderUsername;
+        }
+        if (clientMessageId) {
+          payload.client_id = clientMessageId;
+        }
+        io.to(chatId).emit('message', payload);
 
-      recordActivity({
-        type: 'message:sent',
-        summary: senderUsername
-          ? `Message from "${senderUsername}" in chat ${chatId}.`
-          : `Message sent in chat ${chatId}.`,
-        details: {
-          chatId,
-          senderId: authenticatedUserId,
-          senderUsername,
-          preview,
-        },
-      });
+        const preview =
+          typeof content === 'string'
+            ? content.trim().replace(/\s+/g, ' ').slice(0, 140)
+            : '';
 
-      const normalizedSenderId = normalizeUserId(authenticatedUserId);
-      const recipients = collectNormalizedRecipientIds({ recipientId, recipientIds });
-      if (normalizedSenderId) {
-        recipients.delete(normalizedSenderId);
-      }
-
-      recipients.forEach((userId) => {
-        const sockets = userSocketMap.get(userId);
-        if (!sockets) return;
-        sockets.forEach((socketId) => {
-          io.to(socketId).emit('message', payload);
+        recordActivity({
+          type: 'message:sent',
+          summary: senderUsername
+            ? `Message from "${senderUsername}" in chat ${chatId}.`
+            : `Message sent in chat ${chatId}.`,
+          details: {
+            chatId,
+            senderId: authenticatedUserId,
+            senderUsername,
+            preview,
+            clientMessageId: clientMessageId ?? null,
+          },
         });
-      });
-    } catch (error) {
-      console.error('Error sending message', error);
-      socket.emit('messageError', { error: 'Failed to send message.' });
+
+        const normalizedSenderId = normalizeUserId(authenticatedUserId);
+        const recipients = collectNormalizedRecipientIds({ recipientId, recipientIds });
+        if (normalizedSenderId) {
+          recipients.delete(normalizedSenderId);
+        }
+
+        recipients.forEach((userId) => {
+          const sockets = userSocketMap.get(userId);
+          if (!sockets) return;
+          sockets.forEach((socketId) => {
+            io.to(socketId).emit('message', payload);
+          });
+        });
+      } catch (error) {
+        console.error('Error sending message', error);
+        socket.emit('messageError', { error: 'Failed to send message.' });
+      }
     }
-  });
+  );
 
   socket.on('typing', ({ chat_id: chatId, isTyping }) => {
     if (!authenticatedUserId || !chatId) return;
