@@ -16,34 +16,13 @@
   <main class="admin" id="admin-root">
     <header class="admin__header">
       <div>
-        <h1 class="admin__title">Development Admin Console</h1>
+        <h1 class="admin__title">Open Admin Console</h1>
         <p class="admin__subtitle">
-          Temporary tools for managing demo users and messages. Disable by setting
-          <code>ENABLE_DEV_ADMIN=false</code> when you no longer need it.
+          Lightweight monitoring tools for managing demo users, messages, and platform activity.
+          Disable by setting <code>ENABLE_DEV_ADMIN=false</code> when you no longer need it.
         </p>
       </div>
-      <button type="button" id="admin-sign-out" class="admin__signout" hidden>Sign out</button>
     </header>
-
-    <section id="admin-login" class="admin-card">
-      <h2 class="admin-card__title">Log in as admin</h2>
-      <p class="admin-card__hint">
-        Default credentials: <code>admin</code> / <code>admin-dev-password-change-me</code>
-        (override with <code>DEV_ADMIN_USERNAME</code> &amp; <code>DEV_ADMIN_PASSWORD</code>).
-      </p>
-      <form id="admin-login-form" class="admin-form" novalidate>
-        <label class="admin-form__field">
-          <span class="admin-form__label">Username</span>
-          <input type="text" name="username" autocomplete="username" required />
-        </label>
-        <label class="admin-form__field">
-          <span class="admin-form__label">Password</span>
-          <input type="password" name="password" autocomplete="current-password" required />
-        </label>
-        <button type="submit" class="admin-button">Log in</button>
-        <p class="admin-form__error" id="admin-login-error" role="alert" hidden></p>
-      </form>
-    </section>
 
     <section id="admin-dashboard" class="admin-dashboard" hidden>
       <div class="admin-card">
@@ -70,6 +49,51 @@
           </table>
           <p class="admin-table__empty" id="admin-user-empty" hidden>No users found.</p>
         </div>
+      </div>
+
+      <div class="admin-card">
+        <div class="admin-card__header">
+          <h2 class="admin-card__title">Messages</h2>
+          <div class="admin-card__actions">
+            <button type="button" class="admin-button admin-button--secondary" id="reload-messages">
+              Refresh
+            </button>
+          </div>
+        </div>
+        <p class="admin-card__hint">
+          Showing the most recent 200 messages across all chats.
+        </p>
+        <div class="admin-table__wrapper">
+          <table class="admin-table" aria-live="polite">
+            <thead>
+              <tr>
+                <th scope="col">ID</th>
+                <th scope="col">Chat</th>
+                <th scope="col">Sender</th>
+                <th scope="col">Content</th>
+                <th scope="col">Timestamp</th>
+              </tr>
+            </thead>
+            <tbody id="admin-message-table"></tbody>
+          </table>
+          <p class="admin-table__empty" id="admin-message-empty" hidden>No messages found.</p>
+        </div>
+      </div>
+
+      <div class="admin-card">
+        <div class="admin-card__header">
+          <h2 class="admin-card__title">Live activity</h2>
+          <div class="admin-card__actions">
+            <button type="button" class="admin-button admin-button--secondary" id="reload-activities">
+              Refresh
+            </button>
+          </div>
+        </div>
+        <p class="admin-card__hint">
+          Recent sign-ups, logins, message sends, and maintenance tasks appear here in real time.
+        </p>
+        <ul class="admin-activity" id="admin-activity-list" aria-live="polite"></ul>
+        <p class="admin-table__empty" id="admin-activity-empty" hidden>No activity recorded yet.</p>
       </div>
 
       <div class="admin-card">
