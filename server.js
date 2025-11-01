@@ -338,6 +338,7 @@ const io = new Server(server, {
     origin: corsAllowedOrigins,
     methods: ['GET', 'POST'],
   },
+  maxHttpBufferSize: 25 * 1024 * 1024,
 });
 
 app.get('/admin', (_req, res) => {
@@ -582,6 +583,98 @@ async function saveMessage({ chatId, senderId, content }) {
   }
 }
 
+function parseMessageContentForPreview(content) {
+  if (typeof content !== 'string') {
+    return { text: '', attachments: [] };
+  }
+
+  const trimmed = content.trim();
+  if (!trimmed) {
+    return { text: '', attachments: [] };
+  }
+
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (typeof parsed === 'string') {
+        return { text: parsed, attachments: [] };
+      }
+      const text = typeof parsed.text === 'string' ? parsed.text : '';
+      const attachments = Array.isArray(parsed.attachments) ? parsed.attachments : [];
+      return { text, attachments };
+    } catch (_error) {
+      return { text: trimmed, attachments: [] };
+    }
+  }
+
+  return { text: trimmed, attachments: [] };
+}
+
+function formatVoiceDurationPreview(seconds) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value <= 0) {
+    return '';
+  }
+  const total = Math.max(1, Math.round(value));
+  const minutes = Math.floor(total / 60);
+  const secs = total % 60;
+  const padded = secs.toString().padStart(2, '0');
+  return minutes ? `${minutes}:${padded}` : `0:${padded}`;
+}
+
+function describeAttachmentForPreview(attachment) {
+  if (!attachment || typeof attachment !== 'object') {
+    return 'Attachment';
+  }
+
+  const metadata = attachment.metadata && typeof attachment.metadata === 'object' ? attachment.metadata : null;
+  if (metadata && Number.isFinite(metadata.voiceNoteDuration)) {
+    const duration = formatVoiceDurationPreview(metadata.voiceNoteDuration);
+    return duration ? `Voice message (${duration})` : 'Voice message';
+  }
+
+  const kind = typeof attachment.kind === 'string' ? attachment.kind.toLowerCase() : '';
+  const type = typeof attachment.type === 'string' ? attachment.type.toLowerCase() : '';
+
+  if (kind === 'image' || type.startsWith('image/')) {
+    return 'Photo';
+  }
+  if (kind === 'video' || type.startsWith('video/')) {
+    return 'Video';
+  }
+  if (kind === 'audio' || type.startsWith('audio/')) {
+    return 'Audio';
+  }
+
+  return 'Document';
+}
+
+function buildAttachmentPreviewSummary(attachments = []) {
+  if (!attachments.length) {
+    return '';
+  }
+
+  const [first, ...rest] = attachments;
+  const label = describeAttachmentForPreview(first);
+  if (label.startsWith('Voice message')) {
+    return rest.length ? `${label} +${rest.length}` : label;
+  }
+  if (rest.length) {
+    return `${label} +${rest.length}`;
+  }
+  return label;
+}
+
+function buildMessagePreview(content) {
+  const { text, attachments } = parseMessageContentForPreview(content);
+  const normalizedText = text.trim();
+  if (normalizedText) {
+    return normalizedText.replace(/\s+/g, ' ').slice(0, 140);
+  }
+  const attachmentSummary = buildAttachmentPreviewSummary(attachments);
+  return attachmentSummary;
+}
+
 async function listAllMessages(limit = 200) {
   const normalizedLimit =
     Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 1000) : 200;
@@ -745,7 +838,7 @@ function extractTokenFromHeader(req) {
   return token || null;
 }
 
-function requireHttpAuth(req, res) {
+async function requireHttpAuth(req, res) {
   const token = extractTokenFromHeader(req);
   if (!token) {
     res.status(401).json({ error: 'Authorization required.' });
@@ -755,6 +848,18 @@ function requireHttpAuth(req, res) {
   const payload = verifyToken(token);
   if (!payload || !payload.userId) {
     res.status(401).json({ error: 'Invalid token.' });
+    return null;
+  }
+
+  try {
+    const user = await findUserById(payload.userId);
+    if (!user) {
+      res.status(401).json({ error: 'Account no longer exists.' });
+      return null;
+    }
+  } catch (error) {
+    console.error('Failed to verify user for authentication', error);
+    res.status(500).json({ error: 'Failed to authenticate user.' });
     return null;
   }
 
@@ -1006,7 +1111,7 @@ ensureDevAdminAccount().catch((error) => {
 });
 
 app.get('/api/users/search', async (req, res) => {
-  const auth = requireHttpAuth(req, res);
+  const auth = await requireHttpAuth(req, res);
   if (!auth) {
     return;
   }
@@ -1034,15 +1139,27 @@ app.get('/api/users/search', async (req, res) => {
 io.on('connection', (socket) => {
   let authenticatedUserId = null;
 
-  socket.on('authenticate', ({ token }) => {
+  socket.on('authenticate', async ({ token }) => {
     if (!token) {
       socket.emit('authError', { error: 'Missing token.' });
       return;
     }
 
     const payload = verifyToken(token);
-    if (!payload) {
+    if (!payload || !payload.userId) {
       socket.emit('authError', { error: 'Invalid token.' });
+      return;
+    }
+
+    try {
+      const user = await findUserById(payload.userId);
+      if (!user) {
+        socket.emit('authError', { error: 'Account no longer exists.' });
+        return;
+      }
+    } catch (error) {
+      console.error('Failed to authenticate socket user', error);
+      socket.emit('authError', { error: 'Authentication error.' });
       return;
     }
 
@@ -1091,12 +1208,23 @@ io.on('connection', (socket) => {
 
       try {
         let senderUsername = null;
+        let senderRecord = null;
         try {
-          const sender = await findUserById(authenticatedUserId);
-          senderUsername = sender?.username || null;
-        } catch (_lookupError) {
-          senderUsername = null;
+          senderRecord = await findUserById(authenticatedUserId);
+        } catch (lookupError) {
+          console.error('Failed to verify sender before delivering message', lookupError);
+          socket.emit('authError', { error: 'Authentication error.' });
+          return;
         }
+
+        if (!senderRecord) {
+          socket.emit('authError', { error: 'Account no longer exists.' });
+          removeSocketForUser(authenticatedUserId, socket.id);
+          authenticatedUserId = null;
+          return;
+        }
+
+        senderUsername = senderRecord.username || null;
 
         const message = await saveMessage({ chatId, senderId: authenticatedUserId, content });
         const payload = { ...message, chat_id: chatId };
@@ -1108,10 +1236,7 @@ io.on('connection', (socket) => {
         }
         io.to(chatId).emit('message', payload);
 
-        const preview =
-          typeof content === 'string'
-            ? content.trim().replace(/\s+/g, ' ').slice(0, 140)
-            : '';
+        const preview = buildMessagePreview(content);
 
         recordActivity({
           type: 'message:sent',
