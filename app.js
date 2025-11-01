@@ -438,58 +438,675 @@ const Filter = {
   ARCHIVED: "archived",
 };
 
-const EMOJI_CHARACTERS = [
-  "😀",
-  "😁",
-  "😂",
-  "🤣",
-  "😊",
-  "😇",
-  "🙂",
-  "🙃",
-  "😉",
-  "😍",
-  "😘",
-  "😎",
-  "🤩",
-  "🤔",
-  "🤨",
-  "😐",
-  "😴",
-  "🤤",
-  "😪",
-  "😷",
-  "🤒",
-  "🤕",
-  "🤢",
-  "🤮",
-  "🤧",
-  "😵",
-  "🤯",
-  "🥳",
-  "😡",
-  "😱",
-  "😭",
-  "🥺",
-  "🤗",
-  "🤝",
-  "👍",
-  "👎",
-  "🙏",
-  "👏",
-  "🔥",
-  "🌟",
-  "🎉",
-  "❤️",
-  "💡",
-  "✅",
-  "❌",
-  "💬",
-  "📎",
-  "⏰",
-  "☕",
-  "🍕",
-  "🏖️",
+const EMOJI_CATEGORIES = [
+  {
+    id: "smileys",
+    icon: "😊",
+    label: "Smileys & People",
+    emojis: [
+      "😀",
+      "😁",
+      "😂",
+      "🤣",
+      "😃",
+      "😄",
+      "😅",
+      "😆",
+      "😉",
+      "😊",
+      "😋",
+      "😎",
+      "😍",
+      "😘",
+      "🥰",
+      "😗",
+      "😙",
+      "😚",
+      "🙂",
+      "🤗",
+      "🤩",
+      "🤠",
+      "🥳",
+      "🥸",
+      "😜",
+      "🤪",
+      "🤨",
+      "🧐",
+      "🤓",
+      "😏",
+      "😒",
+      "😞",
+      "😔",
+      "😟",
+      "😕",
+      "🙃",
+      "☹️",
+      "😣",
+      "😖",
+      "😫",
+      "😩",
+      "🥺",
+      "😭",
+      "😤",
+      "😠",
+      "😡",
+      "🤬",
+      "🤯",
+      "😳",
+      "🥵",
+      "🥶",
+      "😱",
+      "😨",
+      "😰",
+      "😥",
+      "😓",
+      "🤤",
+      "😴",
+      "😪",
+      "😵",
+      "🤐",
+      "🥱",
+      "🤫",
+      "🤭",
+      "🤥",
+      "🤢",
+      "🤮",
+      "🤧",
+      "😷",
+      "🤒",
+      "🤕",
+      "🤑",
+      "😇",
+      "🤡",
+    ],
+  },
+  {
+    id: "gestures",
+    icon: "👍",
+    label: "Gestures & Body",
+    emojis: [
+      "👍",
+      "👎",
+      "👌",
+      "✌️",
+      "🤞",
+      "🤟",
+      "🤘",
+      "🤙",
+      "👈",
+      "👉",
+      "👆",
+      "👇",
+      "☝️",
+      "✋",
+      "🤚",
+      "🖐️",
+      "🖖",
+      "👋",
+      "🤝",
+      "🙏",
+      "👏",
+      "🙌",
+      "👐",
+      "🤲",
+      "🤜",
+      "🤛",
+      "💪",
+      "🦾",
+      "🦵",
+      "🦿",
+      "🦶",
+      "👣",
+      "👀",
+      "👁️",
+      "👅",
+      "👄",
+      "🧠",
+      "🫀",
+      "🫁",
+      "🦷",
+      "🦴",
+      "💋",
+      "💅",
+      "🤳",
+      "💆",
+      "💇",
+      "🧖",
+      "🧘",
+      "🛀",
+      "🛌",
+    ],
+  },
+  {
+    id: "animals",
+    icon: "🐾",
+    label: "Animals & Nature",
+    emojis: [
+      "🐶",
+      "🐱",
+      "🐭",
+      "🐹",
+      "🐰",
+      "🦊",
+      "🐻",
+      "🐼",
+      "🐻‍❄️",
+      "🐨",
+      "🐯",
+      "🦁",
+      "🐮",
+      "🐷",
+      "🐸",
+      "🐵",
+      "🦄",
+      "🐔",
+      "🐧",
+      "🐦",
+      "🐤",
+      "🦆",
+      "🦅",
+      "🦉",
+      "🦇",
+      "🐺",
+      "🐗",
+      "🐴",
+      "🦓",
+      "🦌",
+      "🐢",
+      "🐍",
+      "🦎",
+      "🐙",
+      "🦑",
+      "🦀",
+      "🐠",
+      "🐟",
+      "🐡",
+      "🐬",
+      "🐳",
+      "🐋",
+      "🦈",
+      "🐊",
+      "🐅",
+      "🐆",
+      "🐘",
+      "🦏",
+      "🦛",
+      "🐪",
+      "🐫",
+      "🦒",
+      "🦘",
+      "🦬",
+      "🐄",
+      "🐎",
+      "🐑",
+      "🐐",
+      "🐓",
+      "🐕‍🦺",
+      "🐩",
+      "🐈",
+      "🐇",
+      "🐁",
+      "🐀",
+      "🐿️",
+      "🦫",
+      "🦦",
+      "🦥",
+      "🦨",
+      "🦡",
+      "🦢",
+      "🦩",
+      "🦚",
+      "🦜",
+      "🌵",
+      "🎄",
+      "🌲",
+      "🌳",
+      "🌴",
+      "🌱",
+      "🌿",
+      "☘️",
+      "🍀",
+      "🍁",
+      "🍂",
+      "🍃",
+      "🌸",
+      "🌼",
+      "🌻",
+      "🌞",
+      "🌝",
+      "🌚",
+      "⭐",
+      "🌟",
+      "🌠",
+      "🌤️",
+      "🌧️",
+      "⛈️",
+      "🌈",
+      "❄️",
+      "☃️",
+      "🔥",
+      "💧",
+      "🌊",
+    ],
+  },
+  {
+    id: "food",
+    icon: "🍓",
+    label: "Food & Drink",
+    emojis: [
+      "🍎",
+      "🍊",
+      "🍋",
+      "🍌",
+      "🍉",
+      "🍇",
+      "🍓",
+      "🫐",
+      "🍒",
+      "🍑",
+      "🥭",
+      "🍍",
+      "🥥",
+      "🥝",
+      "🍅",
+      "🍆",
+      "🥑",
+      "🥦",
+      "🥬",
+      "🥒",
+      "🌶️",
+      "🫑",
+      "🌽",
+      "🥕",
+      "🧄",
+      "🧅",
+      "🥔",
+      "🍠",
+      "🥐",
+      "🥯",
+      "🍞",
+      "🥖",
+      "🥨",
+      "🧇",
+      "🥞",
+      "🧈",
+      "🧀",
+      "🍗",
+      "🍖",
+      "🍤",
+      "🍣",
+      "🍱",
+      "🥟",
+      "🍜",
+      "🍝",
+      "🍕",
+      "🍔",
+      "🍟",
+      "🌭",
+      "🥪",
+      "🌮",
+      "🌯",
+      "🥗",
+      "🥘",
+      "🥫",
+      "🍲",
+      "🍛",
+      "🍚",
+      "🍙",
+      "🍘",
+      "🍥",
+      "🥠",
+      "🧁",
+      "🍰",
+      "🎂",
+      "🍮",
+      "🍨",
+      "🍦",
+      "🥧",
+      "🍩",
+      "🍪",
+      "🍫",
+      "🍬",
+      "🍭",
+      "🍯",
+      "🧃",
+      "🥤",
+      "🧋",
+      "🍵",
+      "☕",
+      "🫖",
+      "🍶",
+      "🍺",
+      "🍻",
+      "🥂",
+      "🍷",
+      "🍸",
+      "🍹",
+      "🍾",
+    ],
+  },
+  {
+    id: "activities",
+    icon: "⚽",
+    label: "Activities",
+    emojis: [
+      "⚽",
+      "🏀",
+      "🏈",
+      "⚾",
+      "🥎",
+      "🎾",
+      "🏐",
+      "🏉",
+      "🎱",
+      "🏓",
+      "🏸",
+      "🥏",
+      "🏒",
+      "🏑",
+      "🥍",
+      "🏏",
+      "⛳",
+      "🪁",
+      "🏹",
+      "🎣",
+      "🤿",
+      "🥊",
+      "🥋",
+      "🎽",
+      "🛹",
+      "🛼",
+      "🛷",
+      "⛸️",
+      "🥌",
+      "🧗",
+      "🤺",
+      "🤼",
+      "🤸",
+      "🤾",
+      "🏌️",
+      "🏇",
+      "🧘",
+      "🏄",
+      "🏊",
+      "🤽",
+      "🚣",
+      "🚵",
+      "🚴",
+      "🏆",
+      "🥇",
+      "🥈",
+      "🥉",
+      "🎖️",
+      "🏅",
+      "🎗️",
+      "🎫",
+      "🎟️",
+      "🎭",
+      "🎪",
+      "🎨",
+      "🎬",
+      "🎤",
+      "🎧",
+      "🎼",
+      "🎹",
+      "🥁",
+      "🎷",
+      "🎺",
+      "🎸",
+      "🪕",
+      "🎻",
+      "🪘",
+      "🎮",
+      "🕹️",
+      "🧩",
+      "♟️",
+      "🪀",
+      "🎲",
+      "🃏",
+      "🀄",
+      "🎴",
+    ],
+  },
+  {
+    id: "travel",
+    icon: "🌍",
+    label: "Travel & Places",
+    emojis: [
+      "🚗",
+      "🚕",
+      "🚙",
+      "🛻",
+      "🚐",
+      "🚌",
+      "🚎",
+      "🏎️",
+      "🚓",
+      "🚑",
+      "🚒",
+      "🚚",
+      "🚛",
+      "🚜",
+      "🦽",
+      "🦼",
+      "🛴",
+      "🚲",
+      "🛵",
+      "🏍️",
+      "🛺",
+      "🚔",
+      "🚍",
+      "🚘",
+      "🚖",
+      "✈️",
+      "🛩️",
+      "🛫",
+      "🛬",
+      "🛳️",
+      "⛴️",
+      "🚤",
+      "🛥️",
+      "🚢",
+      "⚓",
+      "🚀",
+      "🛸",
+      "🚁",
+      "🚟",
+      "🚠",
+      "🚡",
+      "🚆",
+      "🚅",
+      "🚄",
+      "🚈",
+      "🚝",
+      "🚞",
+      "🚋",
+      "🚊",
+      "🛤️",
+      "🚉",
+      "🗺️",
+      "🗿",
+      "🗽",
+      "🗼",
+      "🏰",
+      "🏯",
+      "🏟️",
+      "🎡",
+      "🎢",
+      "🎠",
+      "🌋",
+      "🗻",
+      "🏔️",
+      "⛰️",
+      "🏕️",
+      "🏖️",
+      "🏜️",
+      "🏝️",
+      "🏞️",
+      "🏛️",
+      "🏗️",
+      "🏘️",
+      "🏙️",
+      "🌆",
+      "🌃",
+      "🌉",
+      "🌁",
+    ],
+  },
+  {
+    id: "objects",
+    icon: "💡",
+    label: "Objects & Symbols",
+    emojis: [
+      "⌚",
+      "📱",
+      "💻",
+      "⌨️",
+      "🖥️",
+      "🖨️",
+      "🖱️",
+      "🖲️",
+      "🕹️",
+      "🗜️",
+      "💽",
+      "💾",
+      "💿",
+      "📀",
+      "📷",
+      "📹",
+      "🎥",
+      "📞",
+      "☎️",
+      "📟",
+      "📠",
+      "📺",
+      "📻",
+      "🎙️",
+      "🎚️",
+      "🎛️",
+      "🧭",
+      "⏱️",
+      "⏲️",
+      "⏰",
+      "🕰️",
+      "⌛",
+      "⏳",
+      "📡",
+      "🔋",
+      "🔌",
+      "💡",
+      "🔦",
+      "🕯️",
+      "🧯",
+      "🛢️",
+      "💵",
+      "💴",
+      "💶",
+      "💷",
+      "💰",
+      "💳",
+      "🧾",
+      "💸",
+      "📧",
+      "📨",
+      "📩",
+      "📤",
+      "📥",
+      "📦",
+      "📫",
+      "📮",
+      "✉️",
+      "📝",
+      "✏️",
+      "✒️",
+      "🖋️",
+      "🖊️",
+      "🖌️",
+      "🖍️",
+      "📚",
+      "📖",
+      "🔖",
+      "🧷",
+      "🧵",
+      "🧶",
+      "🧹",
+      "🧺",
+      "🧼",
+      "🧽",
+      "🧴",
+      "🛒",
+      "🎁",
+      "🎀",
+      "🪄",
+      "🔑",
+      "🗝️",
+      "🔒",
+      "🔓",
+      "🔏",
+      "🔐",
+      "⚙️",
+      "🪛",
+      "🔧",
+      "🔨",
+      "🛠️",
+      "⛏️",
+      "⚒️",
+      "🛡️",
+      "⚔️",
+      "🔫",
+      "🧨",
+      "💣",
+      "🔪",
+      "🗡️",
+      "🚬",
+      "⚰️",
+      "⚱️",
+      "🧿",
+      "🛎️",
+      "🔔",
+      "🎉",
+      "🎊",
+      "💌",
+      "💘",
+      "💝",
+      "💖",
+      "💗",
+      "💓",
+      "💞",
+      "💕",
+      "💟",
+      "❣️",
+      "💔",
+      "❤️",
+      "🧡",
+      "💛",
+      "💚",
+      "💙",
+      "💜",
+      "🖤",
+      "🤍",
+      "🤎",
+      "💯",
+      "⚠️",
+      "✅",
+      "❌",
+      "❗",
+      "❓",
+      "❕",
+      "❔",
+      "♻️",
+      "🔁",
+      "🔂",
+      "🔄",
+      "🔃",
+      "🆕",
+      "🆗",
+      "🆒",
+      "🆓",
+      "🆙",
+      "🆚",
+    ],
+  },
 ];
 
 function deriveISOFromLegacyTimestamp(timestamp) {
@@ -4241,6 +4858,15 @@ function focusMessageSearchInput({ select = false } = {}) {
   }
 }
 
+function handleMessageSearchOutsideClick(event) {
+  if (!isMessageSearchOpen || !messageSearchContainer) return;
+  const target = event.target;
+  if (!(target instanceof Node)) return;
+  if (messageSearchContainer.contains(target)) return;
+  if (openMessageSearchButton && openMessageSearchButton.contains(target)) return;
+  closeMessageSearch({ restoreFocus: false });
+}
+
 function openMessageSearch({ focus = true } = {}) {
   if (isMessageSearchOpen) {
     if (focus) {
@@ -4262,6 +4888,11 @@ function openMessageSearch({ focus = true } = {}) {
   if (messageSearchContainer) {
     messageSearchContainer.hidden = false;
     messageSearchContainer.setAttribute("aria-hidden", "false");
+  }
+
+  if (!messageSearchOutsideClickHandler) {
+    messageSearchOutsideClickHandler = handleMessageSearchOutsideClick;
+    document.addEventListener("pointerdown", messageSearchOutsideClickHandler);
   }
 
   if (messageSearchInput) {
@@ -4292,6 +4923,11 @@ function closeMessageSearch({ restoreFocus = true } = {}) {
   if (messageSearchContainer) {
     messageSearchContainer.hidden = true;
     messageSearchContainer.setAttribute("aria-hidden", "true");
+  }
+
+  if (messageSearchOutsideClickHandler) {
+    document.removeEventListener("pointerdown", messageSearchOutsideClickHandler);
+    messageSearchOutsideClickHandler = null;
   }
 
   messageSearchMatches.forEach((match) => {
@@ -7291,11 +7927,15 @@ function showToast(messageOrOptions, options = {}) {
 
 let isEmojiPickerOpen = false;
 let emojiOutsideClickHandler = null;
+let emojiPickerTabs = [];
+let emojiPickerPanels = [];
+let activeEmojiCategory = EMOJI_CATEGORIES.length ? EMOJI_CATEGORIES[0].id : null;
 let isMessageSearchOpen = false;
 let activeMessageSearchQuery = "";
 let messageSearchMatches = [];
 let activeMessageSearchIndex = 0;
 let shouldScrollToActiveSearchMatch = false;
+let messageSearchOutsideClickHandler = null;
 let voiceRecorderTimerId = null;
 let voiceRecorderStartedAt = 0;
 let voiceRecorderIsActive = false;
@@ -7315,21 +7955,149 @@ let chatWallpaperRestoreFocusTo = null;
 function buildEmojiPicker() {
   if (!emojiPicker) return;
   emojiPicker.innerHTML = "";
+  emojiPickerTabs = [];
+  emojiPickerPanels = [];
 
-  EMOJI_CHARACTERS.forEach((emoji) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "emoji-picker__emoji";
-    button.textContent = emoji;
-    button.dataset.emoji = emoji;
-    button.setAttribute("aria-label", `Insert ${emoji} emoji`);
-    button.setAttribute("role", "menuitem");
-    button.addEventListener("click", () => {
-      insertEmoji(emoji);
-      closeEmojiPicker();
+  const categories = EMOJI_CATEGORIES.filter(
+    (category) => Array.isArray(category.emojis) && category.emojis.length
+  );
+
+  if (!categories.length) return;
+
+  if (!activeEmojiCategory || !categories.some((category) => category.id === activeEmojiCategory)) {
+    activeEmojiCategory = categories[0].id;
+  }
+
+  const tabs = document.createElement("div");
+  tabs.className = "emoji-picker__tabs";
+  tabs.setAttribute("role", "tablist");
+  tabs.setAttribute("aria-label", "Emoji categories");
+
+  const panels = document.createElement("div");
+  panels.className = "emoji-picker__panels";
+
+  categories.forEach((category) => {
+    const tabId = `emoji-tab-${category.id}`;
+    const panelId = `emoji-panel-${category.id}`;
+
+    const tab = document.createElement("button");
+    tab.type = "button";
+    tab.id = tabId;
+    tab.className = "emoji-picker__tab";
+    tab.dataset.category = category.id;
+    tab.dataset.emojiTab = "";
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-controls", panelId);
+    tab.setAttribute("aria-label", category.label);
+    tab.title = category.label;
+    tab.tabIndex = -1;
+    tab.textContent = category.icon || category.emojis[0] || "😀";
+    tab.addEventListener("click", () => {
+      setActiveEmojiCategory(category.id, { focusTab: true });
     });
-    emojiPicker.appendChild(button);
+    tab.addEventListener("keydown", handleEmojiTabKeydown);
+    tabs.appendChild(tab);
+    emojiPickerTabs.push(tab);
+
+    const panel = document.createElement("div");
+    panel.id = panelId;
+    panel.className = "emoji-picker__panel";
+    panel.dataset.category = category.id;
+    panel.dataset.emojiPanel = "";
+    panel.setAttribute("role", "tabpanel");
+    panel.setAttribute("aria-labelledby", tabId);
+    panel.hidden = true;
+    panel.setAttribute("aria-hidden", "true");
+
+    const heading = document.createElement("p");
+    heading.className = "emoji-picker__panel-title";
+    heading.textContent = category.label;
+    panel.appendChild(heading);
+
+    const grid = document.createElement("div");
+    grid.className = "emoji-picker__grid";
+
+    category.emojis.forEach((emoji) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "emoji-picker__emoji";
+      button.textContent = emoji;
+      button.dataset.emoji = emoji;
+      button.setAttribute("aria-label", `Insert ${emoji} emoji`);
+      button.setAttribute("role", "menuitem");
+      button.addEventListener("click", () => {
+        insertEmoji(emoji);
+        closeEmojiPicker();
+      });
+      grid.appendChild(button);
+    });
+
+    panel.appendChild(grid);
+    panels.appendChild(panel);
+    emojiPickerPanels.push(panel);
   });
+
+  emojiPicker.appendChild(tabs);
+  emojiPicker.appendChild(panels);
+  setActiveEmojiCategory(activeEmojiCategory, { focusTab: false });
+}
+
+function setActiveEmojiCategory(categoryId, { focusTab = false } = {}) {
+  if (!emojiPickerTabs.length || !emojiPickerPanels.length) return;
+  const tab = emojiPickerTabs.find((candidate) => candidate.dataset.category === categoryId);
+  const panel = emojiPickerPanels.find((candidate) => candidate.dataset.category === categoryId);
+  if (!tab || !panel) return;
+
+  activeEmojiCategory = categoryId;
+
+  emojiPickerTabs.forEach((candidateTab) => {
+    const isActive = candidateTab === tab;
+    candidateTab.classList.toggle("emoji-picker__tab--active", isActive);
+    candidateTab.setAttribute("aria-selected", isActive ? "true" : "false");
+    candidateTab.tabIndex = isActive ? 0 : -1;
+  });
+
+  emojiPickerPanels.forEach((candidatePanel) => {
+    const isActive = candidatePanel === panel;
+    candidatePanel.classList.toggle("emoji-picker__panel--active", isActive);
+    candidatePanel.hidden = !isActive;
+    candidatePanel.setAttribute("aria-hidden", isActive ? "false" : "true");
+  });
+
+  if (focusTab) {
+    tab.focus();
+  }
+}
+
+function handleEmojiTabKeydown(event) {
+  const { key } = event;
+  if (!emojiPickerTabs.length) return;
+
+  const supportedKeys = ["ArrowLeft", "ArrowRight", "Home", "End"];
+  if (!supportedKeys.includes(key)) return;
+
+  event.preventDefault();
+
+  const currentIndex = emojiPickerTabs.findIndex(
+    (candidate) => candidate.dataset.category === activeEmojiCategory
+  );
+  if (currentIndex === -1) return;
+
+  let nextIndex = currentIndex;
+  if (key === "ArrowRight") {
+    nextIndex = (currentIndex + 1) % emojiPickerTabs.length;
+  } else if (key === "ArrowLeft") {
+    nextIndex = (currentIndex - 1 + emojiPickerTabs.length) % emojiPickerTabs.length;
+  } else if (key === "Home") {
+    nextIndex = 0;
+  } else if (key === "End") {
+    nextIndex = emojiPickerTabs.length - 1;
+  }
+
+  const nextTab = emojiPickerTabs[nextIndex];
+  if (!nextTab) return;
+
+  setActiveEmojiCategory(nextTab.dataset.category, { focusTab: true });
 }
 
 function insertEmoji(emoji) {
@@ -7365,6 +8133,9 @@ function openEmojiPicker() {
   if (!emojiPicker || isEmojiPickerOpen) return;
   if (!emojiPicker.childElementCount) {
     buildEmojiPicker();
+  }
+  if (activeEmojiCategory && emojiPickerTabs.length) {
+    setActiveEmojiCategory(activeEmojiCategory);
   }
   emojiPicker.hidden = false;
   emojiPicker.classList.add("emoji-picker--visible");
@@ -7635,7 +8406,7 @@ function hydrate() {
   if (openMessageSearchButton) {
     openMessageSearchButton.addEventListener("click", () => {
       if (isMessageSearchOpen) {
-        focusMessageSearchInput({ select: true });
+        closeMessageSearch();
       } else {
         openMessageSearch();
       }
