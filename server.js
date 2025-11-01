@@ -358,6 +358,7 @@ app.get('/admin.css', (_req, res) => {
 // entry. Without this, direct message delivery could fail because `Set`
 // lookups treat `1` and `'1'` as different keys.
 const userSocketMap = new Map(); // normalizedUserId -> Set(socketId)
+const messageReadReceipts = new Map(); // normalizedChatId -> Map(messageId -> Set(userId))
 
 let nextActivityId = 1;
 const activityLog = [];
@@ -396,6 +397,163 @@ function normalizeUserId(value) {
     return value.trim();
   }
   return null;
+}
+
+function normalizeChatId(value) {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === 'bigint') {
+    return value.toString();
+  }
+  return null;
+}
+
+function normalizeMessageId(value) {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === 'bigint') {
+    return value.toString();
+  }
+  return null;
+}
+
+const MAX_READ_RECEIPTS_PER_CHAT = 500;
+
+function ensureReceiptStore(chatId) {
+  const normalizedChatId = normalizeChatId(chatId);
+  if (!normalizedChatId) {
+    return null;
+  }
+
+  if (!messageReadReceipts.has(normalizedChatId)) {
+    messageReadReceipts.set(normalizedChatId, new Map());
+  }
+
+  return messageReadReceipts.get(normalizedChatId);
+}
+
+function pruneReceiptStore(store) {
+  if (!store) {
+    return;
+  }
+
+  while (store.size > MAX_READ_RECEIPTS_PER_CHAT) {
+    const oldest = store.keys().next();
+    if (oldest.done) {
+      break;
+    }
+    store.delete(oldest.value);
+  }
+}
+
+function registerMessageForReceipts({ chatId, messageId, readBy = [] }) {
+  const normalizedChatId = normalizeChatId(chatId);
+  const normalizedMessageId = normalizeMessageId(messageId);
+  if (!normalizedChatId || !normalizedMessageId) {
+    return;
+  }
+
+  const store = ensureReceiptStore(normalizedChatId);
+  if (!store) {
+    return;
+  }
+
+  if (!store.has(normalizedMessageId)) {
+    store.set(normalizedMessageId, new Set());
+  }
+
+  const receiptSet = store.get(normalizedMessageId);
+
+  (Array.isArray(readBy) ? readBy : []).forEach((candidate) => {
+    const normalized = normalizeUserId(candidate);
+    if (normalized) {
+      receiptSet.add(normalized);
+    }
+  });
+  pruneReceiptStore(store);
+}
+
+function getReadReceiptsForMessage(chatId, messageId) {
+  const normalizedChatId = normalizeChatId(chatId);
+  const normalizedMessageId = normalizeMessageId(messageId);
+  if (!normalizedChatId || !normalizedMessageId) {
+    return [];
+  }
+
+  const store = messageReadReceipts.get(normalizedChatId);
+  if (!store) {
+    return [];
+  }
+
+  const receiptSet = store.get(normalizedMessageId);
+  if (!receiptSet || receiptSet.size === 0) {
+    return [];
+  }
+
+  return Array.from(receiptSet);
+}
+
+function includeReadReceipts(chatId, message) {
+  if (!message || typeof message !== 'object') {
+    return message;
+  }
+
+  const readBy = getReadReceiptsForMessage(chatId, message.id);
+  return { ...message, read_by: readBy };
+}
+
+function recordMessageReceipts(chatId, messageIds, readerId) {
+  const normalizedChatId = normalizeChatId(chatId);
+  const normalizedReaderId = normalizeUserId(readerId);
+  if (!normalizedChatId || !normalizedReaderId) {
+    return [];
+  }
+
+  const ids = Array.isArray(messageIds) ? messageIds : [];
+  if (!ids.length) {
+    return [];
+  }
+
+  const store = ensureReceiptStore(normalizedChatId);
+  if (!store) {
+    return [];
+  }
+
+  const updated = [];
+  ids.forEach((value) => {
+    const normalizedMessageId = normalizeMessageId(value);
+    if (!normalizedMessageId) {
+      return;
+    }
+
+    if (!store.has(normalizedMessageId)) {
+      store.set(normalizedMessageId, new Set());
+    }
+
+    const receiptSet = store.get(normalizedMessageId);
+    const previousSize = receiptSet.size;
+    receiptSet.add(normalizedReaderId);
+    if (receiptSet.size !== previousSize) {
+      updated.push(normalizedMessageId);
+    }
+  });
+
+  pruneReceiptStore(store);
+  return updated;
 }
 
 // Clients occasionally send `recipient_ids` as a serialized string (comma-separated
@@ -559,8 +717,13 @@ async function searchUsers(query, limit = 5) {
 }
 
 async function saveMessage({ chatId, senderId, content }) {
+  const normalizedChatId = normalizeChatId(chatId);
+  if (!normalizedChatId) {
+    throw new Error('Invalid chat_id provided.');
+  }
+
   if (useInMemoryStore || !pool) {
-    return inMemoryStore.insertMessage({ chatId, senderId, content });
+    return inMemoryStore.insertMessage({ chatId: normalizedChatId, senderId, content });
   }
 
   try {
@@ -568,7 +731,7 @@ async function saveMessage({ chatId, senderId, content }) {
       `INSERT INTO messages (chat_id, sender_id, content)
        VALUES ($1, $2, $3)
        RETURNING id, chat_id, sender_id, content, timestamp`,
-      [chatId, senderId, content]
+      [normalizedChatId, senderId, content]
     );
     const message = result.rows[0];
     if (message && message.timestamp instanceof Date) {
@@ -679,35 +842,53 @@ async function listAllMessages(limit = 200) {
   const normalizedLimit =
     Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 1000) : 200;
 
+  let messages = [];
+
   if (useInMemoryStore || !pool) {
-    return inMemoryStore.getAllMessages(normalizedLimit);
-  }
+    messages = inMemoryStore.getAllMessages(normalizedLimit);
+  } else {
+    try {
+      const result = await pool.query(
+        `SELECT m.id,
+                m.chat_id,
+                m.sender_id,
+                u.username AS sender_username,
+                m.content,
+                m.timestamp
+           FROM messages m
+           LEFT JOIN users u ON m.sender_id = u.id
+           ORDER BY m.timestamp DESC
+           LIMIT $1`,
+        [normalizedLimit]
+      );
 
-  try {
-    const result = await pool.query(
-      `SELECT m.id,
-              m.chat_id,
-              m.sender_id,
-              u.username AS sender_username,
-              m.content,
-              m.timestamp
-         FROM messages m
-         LEFT JOIN users u ON m.sender_id = u.id
-         ORDER BY m.timestamp DESC
-         LIMIT $1`,
-      [normalizedLimit]
-    );
-
-    return result.rows.map((row) => ({
-      ...row,
-      timestamp: row.timestamp instanceof Date ? row.timestamp.toISOString() : row.timestamp,
-    }));
-  } catch (error) {
-    if (enableInMemoryFallback(error)) {
-      return inMemoryStore.getAllMessages(normalizedLimit);
+      messages = result.rows.map((row) => ({
+        ...row,
+        timestamp: row.timestamp instanceof Date ? row.timestamp.toISOString() : row.timestamp,
+      }));
+    } catch (error) {
+      if (enableInMemoryFallback(error)) {
+        messages = inMemoryStore.getAllMessages(normalizedLimit);
+      } else {
+        throw error;
+      }
     }
-    throw error;
   }
+
+  if (!Array.isArray(messages)) {
+    return [];
+  }
+
+  return messages.map((message) => {
+    if (message) {
+      registerMessageForReceipts({
+        chatId: message.chat_id,
+        messageId: message.id,
+        readBy: message.read_by || message.readBy || [],
+      });
+    }
+    return includeReadReceipts(message?.chat_id, message);
+  });
 }
 
 async function listUsers() {
@@ -753,6 +934,7 @@ async function deleteUserById(userId) {
 async function purgeDatabase({ removeUsers = false } = {}) {
   if (useInMemoryStore || !pool) {
     inMemoryStore.purgeDatabase({ removeUsers });
+    messageReadReceipts.clear();
     return { messagesDeleted: null, usersDeleted: null };
   }
 
@@ -768,11 +950,13 @@ async function purgeDatabase({ removeUsers = false } = {}) {
       );
     }
     await client.query('COMMIT');
+    messageReadReceipts.clear();
     return { messagesDeleted: messageResult.rowCount, usersDeleted: userResult.rowCount };
   } catch (error) {
     await client.query('ROLLBACK');
     if (enableInMemoryFallback(error)) {
       inMemoryStore.purgeDatabase({ removeUsers });
+      messageReadReceipts.clear();
       return { messagesDeleted: null, usersDeleted: null };
     }
     throw error;
@@ -867,37 +1051,63 @@ async function requireHttpAuth(req, res) {
 }
 
 async function fetchRecentMessages(chatId, limit = MAX_CHAT_HISTORY) {
-  if (useInMemoryStore || !pool) {
-    return inMemoryStore.getRecentMessages(chatId, limit);
+  const normalizedChatId = normalizeChatId(chatId);
+  if (!normalizedChatId) {
+    return [];
   }
 
-  try {
-    const result = await pool.query(
-      `SELECT m.id,
-              m.chat_id,
-              m.sender_id,
-              u.username AS sender_username,
-              m.content,
-              m.timestamp
-         FROM messages m
-         LEFT JOIN users u ON m.sender_id = u.id
-        WHERE m.chat_id = $1
-        ORDER BY m.timestamp DESC
-        LIMIT $2`,
-      [chatId, limit]
-    );
-    return result.rows
-      .map((row) => ({
-        ...row,
-        timestamp: row.timestamp instanceof Date ? row.timestamp.toISOString() : row.timestamp,
-      }))
-      .reverse();
-  } catch (error) {
-    if (enableInMemoryFallback(error)) {
-      return inMemoryStore.getRecentMessages(chatId, limit);
+  let messages = [];
+
+  if (useInMemoryStore || !pool) {
+    messages = inMemoryStore.getRecentMessages(normalizedChatId, limit);
+  } else {
+    try {
+      const result = await pool.query(
+        `SELECT m.id,
+                m.chat_id,
+                m.sender_id,
+                u.username AS sender_username,
+                m.content,
+                m.timestamp
+           FROM messages m
+           LEFT JOIN users u ON m.sender_id = u.id
+          WHERE m.chat_id = $1
+          ORDER BY m.timestamp DESC
+          LIMIT $2`,
+        [normalizedChatId, limit]
+      );
+
+      messages = result.rows
+        .map((row) => ({
+          ...row,
+          timestamp: row.timestamp instanceof Date ? row.timestamp.toISOString() : row.timestamp,
+        }))
+        .reverse();
+    } catch (error) {
+      if (enableInMemoryFallback(error)) {
+        messages = inMemoryStore.getRecentMessages(normalizedChatId, limit);
+      } else {
+        throw error;
+      }
     }
-    throw error;
   }
+
+  if (!Array.isArray(messages)) {
+    return [];
+  }
+
+  messages.forEach((message) => {
+    if (!message) {
+      return;
+    }
+    registerMessageForReceipts({
+      chatId: normalizedChatId,
+      messageId: message.id,
+      readBy: message.read_by || message.readBy || [],
+    });
+  });
+
+  return messages.map((message) => includeReadReceipts(normalizedChatId, message));
 }
 
 function generateToken(userId, isAdmin = false) {
@@ -1173,15 +1383,16 @@ io.on('connection', (socket) => {
       socket.emit('authError', { error: 'Authenticate before joining chats.' });
       return;
     }
-    if (!chatId) {
+    const normalizedChatId = normalizeChatId(chatId);
+    if (!normalizedChatId) {
       socket.emit('chatError', { error: 'chat_id is required to join a chat.' });
       return;
     }
 
     try {
-      socket.join(chatId);
-      const messages = await fetchRecentMessages(chatId);
-      socket.emit('chatHistory', { chat_id: chatId, messages });
+      socket.join(normalizedChatId);
+      const messages = await fetchRecentMessages(normalizedChatId);
+      socket.emit('chatHistory', { chat_id: normalizedChatId, messages });
     } catch (error) {
       console.error('Error joining chat', error);
       socket.emit('chatError', { error: 'Failed to join chat.' });
@@ -1201,7 +1412,13 @@ io.on('connection', (socket) => {
         socket.emit('authError', { error: 'Authenticate before sending messages.' });
         return;
       }
-      if (!chatId || !content) {
+      if (!content) {
+        socket.emit('messageError', { error: 'chat_id and content are required.' });
+        return;
+      }
+
+      const normalizedChatId = normalizeChatId(chatId);
+      if (!normalizedChatId) {
         socket.emit('messageError', { error: 'chat_id and content are required.' });
         return;
       }
@@ -1226,25 +1443,37 @@ io.on('connection', (socket) => {
 
         senderUsername = senderRecord.username || null;
 
-        const message = await saveMessage({ chatId, senderId: authenticatedUserId, content });
-        const payload = { ...message, chat_id: chatId };
+        const message = await saveMessage({
+          chatId: normalizedChatId,
+          senderId: authenticatedUserId,
+          content,
+        });
+        registerMessageForReceipts({
+          chatId: normalizedChatId,
+          messageId: message.id,
+        });
+        const payload = {
+          ...message,
+          chat_id: normalizedChatId,
+          read_by: getReadReceiptsForMessage(normalizedChatId, message.id),
+        };
         if (senderUsername && !payload.sender_username) {
           payload.sender_username = senderUsername;
         }
         if (clientMessageId) {
           payload.client_id = clientMessageId;
         }
-        io.to(chatId).emit('message', payload);
+        io.to(normalizedChatId).emit('message', payload);
 
         const preview = buildMessagePreview(content);
 
         recordActivity({
           type: 'message:sent',
           summary: senderUsername
-            ? `Message from "${senderUsername}" in chat ${chatId}.`
-            : `Message sent in chat ${chatId}.`,
+            ? `Message from "${senderUsername}" in chat ${normalizedChatId}.`
+            : `Message sent in chat ${normalizedChatId}.`,
           details: {
-            chatId,
+            chatId: normalizedChatId,
             senderId: authenticatedUserId,
             senderUsername,
             preview,
@@ -1273,12 +1502,55 @@ io.on('connection', (socket) => {
   );
 
   socket.on('typing', ({ chat_id: chatId, isTyping }) => {
-    if (!authenticatedUserId || !chatId) return;
-    socket.to(chatId).emit('typing', {
-      chat_id: chatId,
+    if (!authenticatedUserId) return;
+    const normalizedChatId = normalizeChatId(chatId);
+    if (!normalizedChatId) return;
+    socket.to(normalizedChatId).emit('typing', {
+      chat_id: normalizedChatId,
       user_id: authenticatedUserId,
       isTyping: Boolean(isTyping),
     });
+  });
+
+  socket.on('messagesRead', ({ chat_id: chatId, message_ids: messageIds }) => {
+    if (!authenticatedUserId) {
+      socket.emit('authError', { error: 'Authenticate before sending read receipts.' });
+      return;
+    }
+
+    const normalizedChatId = normalizeChatId(chatId);
+    if (!normalizedChatId) {
+      socket.emit('chatError', { error: 'chat_id is required for read receipts.' });
+      return;
+    }
+
+    const normalizedMessageIds = Array.isArray(messageIds)
+      ? messageIds.map((value) => normalizeMessageId(value)).filter(Boolean)
+      : [];
+
+    if (!normalizedMessageIds.length) {
+      return;
+    }
+
+    try {
+      const updated = recordMessageReceipts(normalizedChatId, normalizedMessageIds, authenticatedUserId);
+      if (!updated.length) {
+        return;
+      }
+
+      const readerId = normalizeUserId(authenticatedUserId);
+      if (!readerId) {
+        return;
+      }
+
+      io.to(normalizedChatId).emit('messagesRead', {
+        chat_id: normalizedChatId,
+        reader_id: readerId,
+        message_ids: updated,
+      });
+    } catch (error) {
+      console.error('Failed to record read receipts', error);
+    }
   });
 
   socket.on('disconnect', () => {
