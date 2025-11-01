@@ -71,21 +71,25 @@ const profileModalAvatarElement = document.getElementById("profile-modal-avatar"
 const profileSummaryNameElement = document.getElementById("profile-summary-name");
 const profileSummaryAboutElement = document.getElementById("profile-summary-about");
 const profileCancelButton = document.getElementById("profile-cancel");
-const newContactModal = document.getElementById("new-contact-modal");
-const newContactForm = document.getElementById("new-contact-form");
-const newContactCloseButton = document.getElementById("new-contact-close");
-const newContactCancelButton = document.getElementById("new-contact-cancel");
-const newContactTitleElement = document.getElementById("new-contact-title");
-const newContactPreviewElement = document.getElementById("new-contact-preview");
-const newContactLookupElement = document.getElementById("new-contact-lookup");
-const newContactSuggestionsElement = document.getElementById("new-contact-suggestions");
-const newContactSuggestionsList = document.getElementById("new-contact-suggestions-list");
-const newContactBackButton = document.getElementById("new-contact-back");
-const newChatListView = document.getElementById("new-chat-list-view");
+const startChatModal = document.getElementById("start-chat-modal");
+const startChatCloseButton = document.getElementById("start-chat-close");
+const newChatIntroElement = document.getElementById("new-chat-intro");
 const newChatContactListElement = document.getElementById("new-chat-contact-list");
 const newChatEmptyElement = document.getElementById("new-chat-empty");
 const newChatSearchInput = document.getElementById("new-chat-search");
 const newChatAddContactButton = document.getElementById("new-chat-add-contact");
+const newChatActionsElement = document.getElementById("new-chat-actions");
+const newChatSelectionSummary = document.getElementById("new-chat-selection-summary");
+const newChatCancelButton = document.getElementById("new-chat-cancel");
+const newChatConfirmButton = document.getElementById("new-chat-confirm");
+const newContactModal = document.getElementById("new-contact-modal");
+const newContactForm = document.getElementById("new-contact-form");
+const newContactCloseButton = document.getElementById("new-contact-close");
+const newContactCancelButton = document.getElementById("new-contact-cancel");
+const newContactPreviewElement = document.getElementById("new-contact-preview");
+const newContactLookupElement = document.getElementById("new-contact-lookup");
+const newContactSuggestionsElement = document.getElementById("new-contact-suggestions");
+const newContactSuggestionsList = document.getElementById("new-contact-suggestions-list");
 const newContactMethodInputs = newContactForm
   ? Array.from(newContactForm.querySelectorAll('input[name="contact-method"]'))
   : [];
@@ -372,20 +376,9 @@ const ContactMethodLabels = {
   [ContactMethod.GROUP]: "group chat",
 };
 
-const NewContactModalContext = {
-  LIST: "list",
-  CONTACT: "contact",
-};
-
-const NewContactModalLabels = {
-  [NewContactModalContext.LIST]: {
-    title: "Start new chat",
-    closeLabel: "Close start new chat",
-  },
-  [NewContactModalContext.CONTACT]: {
-    title: "Add contact",
-    closeLabel: "Close add contact",
-  },
+const StartChatMode = {
+  CHAT: "chat",
+  PARTICIPANTS: "participants",
 };
 
 const ChatType = {
@@ -1808,6 +1801,30 @@ function getContactKey(contact) {
     return `account:${normalized.accountId}`;
   }
   return normalized.id || normalized.lookupKey || "";
+}
+
+function getContactSelectionKey(contact) {
+  const normalized = normalizeContact(contact);
+  if (!normalized) return "";
+
+  const baseKey = getContactKey(normalized);
+  if (baseKey) {
+    return baseKey;
+  }
+
+  if (normalized.email) {
+    return `email:${normalized.email}`;
+  }
+  if (normalized.phone) {
+    return `phone:${normalized.phone}`;
+  }
+  if (normalized.displayName) {
+    return `name:${normalized.displayName.trim().toLowerCase()}`;
+  }
+  if (normalized.nickname) {
+    return `nickname:${normalized.nickname.trim().toLowerCase()}`;
+  }
+  return "";
 }
 
 function getContactAccountId(contact) {
@@ -4748,6 +4765,15 @@ let activeFilter = Filter.ALL;
 let settingsRestoreFocusTo = null;
 let profileRestoreFocusTo = null;
 let newContactRestoreFocusTo = null;
+let startChatRestoreFocusTo = null;
+let startChatMode = StartChatMode.CHAT;
+let startChatSelectedContacts = new Map();
+let startChatParticipantChatId = null;
+const newChatIntroDefaultText =
+  typeof newChatIntroElement?.textContent === "string"
+    ? newChatIntroElement.textContent
+    : "";
+const startChatParticipantsIntroText = "Select contacts to add to the group.";
 let newGroupRestoreFocusTo = null;
 let pendingAttachments = [];
 let activeAuthView = AuthView.LOGIN;
@@ -4761,12 +4787,25 @@ let contactLookupState = {
 let chatMessagesShouldStickToBottom = true;
 let hasShownStorageQuotaWarning = false;
 
-function getNewContactFallbackTrigger() {
+function getStartChatFallbackTrigger() {
   if (startNewChatButton instanceof HTMLElement) {
     return startNewChatButton;
   }
+  if (chatAddParticipantButton instanceof HTMLElement) {
+    return chatAddParticipantButton;
+  }
   if (addContactButton instanceof HTMLElement) {
     return addContactButton;
+  }
+  return null;
+}
+
+function getAddContactFallbackTrigger() {
+  if (addContactButton instanceof HTMLElement) {
+    return addContactButton;
+  }
+  if (startNewChatButton instanceof HTMLElement) {
+    return startNewChatButton;
   }
   if (startNewGroupButton instanceof HTMLElement) {
     return startNewGroupButton;
@@ -4774,29 +4813,11 @@ function getNewContactFallbackTrigger() {
   return null;
 }
 
-function setNewContactModalContext(context, overrides = {}) {
-  if (!newContactModal) return;
-
-  const allowed = Object.values(NewContactModalContext);
-  const normalized = allowed.includes(context) ? context : NewContactModalContext.LIST;
-  newContactModal.dataset.context = normalized;
-
-  const defaults = NewContactModalLabels[normalized] ?? NewContactModalLabels[NewContactModalContext.LIST];
-  const title = overrides.title ?? defaults.title;
-  const closeLabel = overrides.closeLabel ?? defaults.closeLabel;
-
-  if (newContactTitleElement && typeof title === "string") {
-    newContactTitleElement.textContent = title;
-  }
-
-  if (newContactCloseButton) {
-    if (typeof closeLabel === "string" && closeLabel.trim()) {
-      newContactCloseButton.setAttribute("aria-label", closeLabel);
-      newContactCloseButton.title = closeLabel;
-    } else {
-      newContactCloseButton.removeAttribute("aria-label");
-      newContactCloseButton.removeAttribute("title");
-    }
+function updateStartChatRestoreTarget(trigger) {
+  if (trigger instanceof HTMLElement) {
+    startChatRestoreFocusTo = trigger;
+  } else if (!startChatRestoreFocusTo) {
+    startChatRestoreFocusTo = getStartChatFallbackTrigger();
   }
 }
 
@@ -4804,7 +4825,7 @@ function updateNewContactRestoreTarget(trigger) {
   if (trigger instanceof HTMLElement) {
     newContactRestoreFocusTo = trigger;
   } else if (!newContactRestoreFocusTo) {
-    newContactRestoreFocusTo = getNewContactFallbackTrigger();
+    newContactRestoreFocusTo = getAddContactFallbackTrigger();
   }
 }
 
@@ -5850,7 +5871,7 @@ function renderChatView(chat) {
   markChatMessagesAsRead(chat);
 }
 
-function handleAddGroupParticipants() {
+function fallbackAddGroupParticipants() {
   const chat = getActiveChat();
   if (!chat || chat.type !== ChatType.GROUP) {
     showToast("Open a group chat to add participants");
@@ -5903,6 +5924,26 @@ function handleAddGroupParticipants() {
       uniqueAdditions.length === 1 ? "" : "s"
     }`
   );
+}
+
+function handleAddGroupParticipants() {
+  const chat = getActiveChat();
+  if (!chat || chat.type !== ChatType.GROUP) {
+    showToast("Open a group chat to add participants");
+    return;
+  }
+
+  if (startChatModal && newChatContactListElement) {
+    openStartChatModal({
+      trigger:
+        chatAddParticipantButton instanceof HTMLElement ? chatAddParticipantButton : null,
+      mode: StartChatMode.PARTICIPANTS,
+      groupChatId: chat.id,
+    });
+    return;
+  }
+
+  fallbackAddGroupParticipants();
 }
 
 function openChat(chatId) {
@@ -7217,7 +7258,7 @@ function updateNewContactPreview() {
   if (!newContactPreviewElement) return;
   const contact = collectNewContactData({ strict: false, showErrors: false });
   if (!contact) {
-    newContactPreviewElement.textContent = "Provide details to preview the chat.";
+    newContactPreviewElement.textContent = "Provide details to preview the contact.";
     return;
   }
 
@@ -7237,7 +7278,7 @@ function updateNewContactPreview() {
   if (hasLookupMatch) {
     details.push("Existing account");
   }
-  const description = details.join(" • ") || "Ready to start chatting.";
+  const description = details.join(" • ") || "Ready to save this contact.";
 
   newContactPreviewElement.innerHTML = "";
   const nameNode = document.createElement("strong");
@@ -7260,12 +7301,10 @@ function renderContactSuggestions(results, query = "") {
     : [];
 
   if (!entries.length) {
-    newContactSuggestionsElement.hidden = true;
     newContactSuggestionsElement.setAttribute("aria-hidden", "true");
     return;
   }
 
-  newContactSuggestionsElement.hidden = false;
   newContactSuggestionsElement.setAttribute("aria-hidden", "false");
 
   const trimmedQuery = typeof query === "string" ? query.trim() : "";
@@ -7487,6 +7526,50 @@ function handleContactSuggestionClick(event) {
   newContactNicknameInput.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
+function updateStartChatActions() {
+  if (!newChatConfirmButton || !newChatSelectionSummary) {
+    return;
+  }
+
+  if (startChatMode !== StartChatMode.PARTICIPANTS) {
+    newChatConfirmButton.disabled = true;
+    newChatConfirmButton.setAttribute("aria-disabled", "true");
+    newChatConfirmButton.textContent = "Add participants";
+    newChatSelectionSummary.textContent = startChatParticipantsIntroText;
+    return;
+  }
+
+  const count = startChatSelectedContacts.size;
+  newChatSelectionSummary.textContent =
+    count === 0
+      ? startChatParticipantsIntroText
+      : `Selected ${count} contact${count === 1 ? "" : "s"}.`;
+  newChatConfirmButton.disabled = count === 0;
+  newChatConfirmButton.setAttribute("aria-disabled", count === 0 ? "true" : "false");
+  newChatConfirmButton.textContent =
+    count === 0
+      ? "Add participants"
+      : `Add ${count} participant${count === 1 ? "" : "s"}`;
+}
+
+function resetStartChatSelection() {
+  startChatSelectedContacts = new Map();
+  updateStartChatActions();
+}
+
+function updateStartChatModeUI() {
+  if (newChatIntroElement) {
+    newChatIntroElement.textContent =
+      startChatMode === StartChatMode.PARTICIPANTS
+        ? startChatParticipantsIntroText
+        : newChatIntroDefaultText;
+  }
+  if (newChatActionsElement) {
+    newChatActionsElement.hidden = startChatMode !== StartChatMode.PARTICIPANTS;
+  }
+  updateStartChatActions();
+}
+
 function renderNewChatContacts(query = newChatSearchInput?.value ?? "") {
   if (!newChatContactListElement) return;
 
@@ -7510,6 +7593,8 @@ function renderNewChatContacts(query = newChatSearchInput?.value ?? "") {
       if (copy) {
         copy.textContent = normalizedQuery
           ? "Try searching by a different name, email, or phone number."
+          : startChatMode === StartChatMode.PARTICIPANTS
+          ? "Add a new contact to invite them to this group."
           : "Add a new contact to start your first conversation.";
       }
     }
@@ -7537,6 +7622,10 @@ function renderNewChatContacts(query = newChatSearchInput?.value ?? "") {
     }
     if (normalized.lookupKey) {
       button.dataset.contactLookup = normalized.lookupKey;
+    }
+    const selectionKey = getContactSelectionKey(normalized);
+    if (selectionKey) {
+      button.dataset.selectionKey = selectionKey;
     }
 
     const avatar = document.createElement("span");
@@ -7584,55 +7673,33 @@ function renderNewChatContacts(query = newChatSearchInput?.value ?? "") {
     const action = document.createElement("span");
     action.className = "new-chat__contact-action";
     action.setAttribute("aria-hidden", "true");
-    action.textContent = "→";
+
+    const isSelected =
+      startChatMode === StartChatMode.PARTICIPANTS &&
+      selectionKey &&
+      startChatSelectedContacts.has(selectionKey);
+    if (isSelected) {
+      button.classList.add("new-chat__contact--selected");
+    }
+
+    if (startChatMode === StartChatMode.PARTICIPANTS) {
+      action.textContent = isSelected ? "✓" : "+";
+      button.setAttribute("aria-pressed", isSelected ? "true" : "false");
+      const labelAction = isSelected ? "Remove" : "Select";
+      button.setAttribute("aria-label", `${labelAction} ${nameText} for the group`);
+    } else {
+      action.textContent = "→";
+      button.removeAttribute("aria-pressed");
+      button.setAttribute("aria-label", `Start chat with ${nameText}`);
+    }
 
     button.appendChild(avatar);
     button.appendChild(details);
     button.appendChild(action);
-    button.setAttribute("aria-label", `Start chat with ${nameText}`);
 
     listItem.appendChild(button);
     newChatContactListElement.appendChild(listItem);
   });
-}
-
-function showNewChatView(view, { focus = true } = {}) {
-  if (!newContactModal) return;
-  const mode = view === "form" ? "form" : "list";
-  newContactModal.dataset.view = mode;
-
-  if (newChatListView) {
-    newChatListView.hidden = mode !== "list";
-  }
-  if (newContactForm) {
-    newContactForm.hidden = mode !== "form";
-  }
-  if (newContactBackButton) {
-    newContactBackButton.hidden = mode !== "form";
-  }
-
-  if (!focus) {
-    return;
-  }
-
-  if (mode === "list") {
-    if (newChatSearchInput instanceof HTMLElement) {
-      newChatSearchInput.focus();
-    }
-    return;
-  }
-
-  const activeGroup = newContactFieldGroups.find(
-    (group) => group.dataset.contactFields === getActiveNewContactMethod()
-  );
-  const focusTarget = activeGroup
-    ? activeGroup.querySelector("input:not([type=\"radio\"]):not([disabled]), textarea:not([disabled])")
-    : newContactForm.querySelector(
-        "input:not([type=\"radio\"]):not([disabled]), textarea:not([disabled])"
-      );
-  if (focusTarget instanceof HTMLElement) {
-    focusTarget.focus();
-  }
 }
 
 function handleNewChatSearch(event) {
@@ -7654,6 +7721,52 @@ function findStoredContactByButton(target) {
   return null;
 }
 
+function updateStartChatContactButton(button, isSelected) {
+  if (!(button instanceof HTMLElement)) {
+    return;
+  }
+  button.classList.toggle("new-chat__contact--selected", isSelected);
+  if (startChatMode === StartChatMode.PARTICIPANTS) {
+    button.setAttribute("aria-pressed", isSelected ? "true" : "false");
+    const nameText = button.querySelector(".new-chat__contact-name")?.textContent?.trim() ?? "contact";
+    const labelAction = isSelected ? "Remove" : "Select";
+    button.setAttribute("aria-label", `${labelAction} ${nameText} for the group`);
+    const action = button.querySelector(".new-chat__contact-action");
+    if (action instanceof HTMLElement) {
+      action.textContent = isSelected ? "✓" : "+";
+    }
+  }
+}
+
+function toggleStartChatSelection(button) {
+  if (startChatMode !== StartChatMode.PARTICIPANTS) {
+    return;
+  }
+
+  const selectionKey = button.dataset.selectionKey ?? "";
+  if (!selectionKey) {
+    return;
+  }
+
+  const isSelected = startChatSelectedContacts.has(selectionKey);
+  if (isSelected) {
+    startChatSelectedContacts.delete(selectionKey);
+    updateStartChatContactButton(button, false);
+    updateStartChatActions();
+    return;
+  }
+
+  const storedContact = findStoredContactByButton(button);
+  const fallbackName = button.querySelector(".new-chat__contact-name")?.textContent ?? "";
+  const normalized = normalizeContact(storedContact ?? { displayName: fallbackName });
+  if (!normalized) {
+    return;
+  }
+  startChatSelectedContacts.set(selectionKey, normalized);
+  updateStartChatContactButton(button, true);
+  updateStartChatActions();
+}
+
 function handleNewChatContactClick(event) {
   const button =
     event.target instanceof HTMLElement
@@ -7663,6 +7776,11 @@ function handleNewChatContactClick(event) {
     return;
   }
   event.preventDefault();
+
+  if (startChatMode === StartChatMode.PARTICIPANTS) {
+    toggleStartChatSelection(button);
+    return;
+  }
 
   const storedContact = findStoredContactByButton(button);
   const nameFallback =
@@ -7674,10 +7792,16 @@ function handleNewChatContactClick(event) {
 }
 
 function handleStartNewContact() {
-  setNewContactModalContext(NewContactModalContext.CONTACT);
+  if (startChatModal && !startChatModal.hidden) {
+    closeStartChatModal({ restoreFocus: false });
+  }
   resetNewContactForm();
-  showNewChatView("form", { focus: false });
-  setActiveContactMethod(ContactMethod.NICKNAME, { focus: true });
+  setActiveContactMethod(ContactMethod.NICKNAME, { focus: false });
+  openNewContactModal({
+    trigger:
+      newChatAddContactButton instanceof HTMLElement ? newChatAddContactButton : undefined,
+    focus: true,
+  });
 }
 
 function openChatForContact(contact, { showToastMessage = true } = {}) {
@@ -7690,7 +7814,7 @@ function openChatForContact(contact, { showToastMessage = true } = {}) {
 
   if (existing) {
     openChat(existing.id);
-    closeNewContactModal();
+    closeStartChatModal();
     if (showToastMessage) {
       showToast(`You're chatting with ${existing.name}`);
     }
@@ -7699,7 +7823,7 @@ function openChatForContact(contact, { showToastMessage = true } = {}) {
 
   const status = deriveContactStatus(normalized);
   const chat = createChat(normalized.displayName, { status, contact: normalized });
-  closeNewContactModal();
+  closeStartChatModal();
   if (showToastMessage) {
     showToast(`Started a chat with ${chat.name}`);
   }
@@ -7710,16 +7834,11 @@ function openNewContactModal(options = {}) {
   if (!newContactModal || !newContactForm) return;
   if (!newContactModal.hidden) return;
 
-  const {
-    view = "list",
-    method = ContactMethod.NICKNAME,
-    focus = true,
-    trigger = null,
-    title,
-    closeLabel,
-    context: providedContext,
-  } = options;
+  const { focus = true, trigger = null } = options;
 
+  if (startChatModal && !startChatModal.hidden) {
+    closeStartChatModal({ restoreFocus: false });
+  }
   if (profileModal && !profileModal.hidden) {
     closeProfile({ restoreFocus: false });
   }
@@ -7727,40 +7846,31 @@ function openNewContactModal(options = {}) {
     closeSettings({ restoreFocus: false });
   }
 
-  const mode = view === "form" ? "form" : "list";
-  const context = providedContext
-    ? providedContext
-    : mode === "form"
-    ? NewContactModalContext.CONTACT
-    : NewContactModalContext.LIST;
-
   const triggerElement =
     trigger instanceof HTMLElement
       ? trigger
       : document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
-  newContactRestoreFocusTo = triggerElement ?? getNewContactFallbackTrigger();
+  updateNewContactRestoreTarget(triggerElement ?? getAddContactFallbackTrigger());
 
   resetNewContactForm();
-  renderNewChatContacts();
-
-  if (mode === "list" && newChatSearchInput) {
-    newChatSearchInput.value = "";
-  }
-
-  if (mode === "form") {
-    setActiveContactMethod(method, { focus: false });
-  }
-
-  setNewContactModalContext(context, { title, closeLabel });
-  showNewChatView(mode, { focus: false });
+  resetContactLookup();
+  clearContactLookupTimer();
 
   newContactModal.hidden = false;
   document.body.classList.add("modal-open");
 
   if (focus) {
-    showNewChatView(mode, { focus: true });
+    const focusTarget =
+      newContactNicknameInput instanceof HTMLElement
+        ? newContactNicknameInput
+        : newContactForm.querySelector(
+            "input:not([type=\"radio\"]):not([disabled]), textarea:not([disabled])"
+          );
+    if (focusTarget instanceof HTMLElement) {
+      focusTarget.focus();
+    }
   }
 }
 
@@ -7769,18 +7879,20 @@ function closeNewContactModal({ restoreFocus = true } = {}) {
   if (newContactModal.hidden) return;
 
   newContactModal.hidden = true;
-  showNewChatView("list", { focus: false });
-  setNewContactModalContext(NewContactModalContext.LIST);
   resetContactLookup();
   clearContactLookupTimer();
+  resetNewContactForm();
+
   if (
+    (!startChatModal || startChatModal.hidden) &&
     (!profileModal || profileModal.hidden) &&
-    (!settingsModal || settingsModal.hidden)
+    (!settingsModal || settingsModal.hidden) &&
+    (!newGroupModal || newGroupModal.hidden) &&
+    (!chatWallpaperModal || chatWallpaperModal.hidden) &&
+    (!callPlanModal || callPlanModal.hidden)
   ) {
     document.body.classList.remove("modal-open");
   }
-
-  resetNewContactForm();
 
   const restoreTarget = newContactRestoreFocusTo;
   newContactRestoreFocusTo = null;
@@ -7789,11 +7901,176 @@ function closeNewContactModal({ restoreFocus = true } = {}) {
   if (restoreTarget instanceof HTMLElement) {
     restoreTarget.focus();
   } else {
-    const fallback = getNewContactFallbackTrigger();
+    const fallback = getAddContactFallbackTrigger();
     if (fallback instanceof HTMLElement) {
       fallback.focus();
     }
   }
+}
+
+function openStartChatModal(options = {}) {
+  if (!startChatModal) return;
+
+  const {
+    focus = true,
+    trigger = null,
+    mode = StartChatMode.CHAT,
+    groupChatId = null,
+  } = options;
+
+  if (newContactModal && !newContactModal.hidden) {
+    closeNewContactModal({ restoreFocus: false });
+  }
+  if (profileModal && !profileModal.hidden) {
+    closeProfile({ restoreFocus: false });
+  }
+  if (settingsModal && !settingsModal.hidden) {
+    closeSettings({ restoreFocus: false });
+  }
+
+  const triggerElement =
+    trigger instanceof HTMLElement
+      ? trigger
+      : document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+  updateStartChatRestoreTarget(triggerElement ?? getStartChatFallbackTrigger());
+
+  const normalizedMode = Object.values(StartChatMode).includes(mode)
+    ? mode
+    : StartChatMode.CHAT;
+  startChatMode = normalizedMode;
+  startChatParticipantChatId =
+    normalizedMode === StartChatMode.PARTICIPANTS ? groupChatId : null;
+  resetStartChatSelection();
+  if (newChatSearchInput) {
+    newChatSearchInput.value = "";
+  }
+  updateStartChatModeUI();
+  renderNewChatContacts();
+
+  startChatModal.hidden = false;
+  document.body.classList.add("modal-open");
+
+  if (focus && newChatSearchInput instanceof HTMLElement) {
+    newChatSearchInput.focus();
+  }
+}
+
+function closeStartChatModal({ restoreFocus = true } = {}) {
+  if (!startChatModal) return;
+  if (startChatModal.hidden) return;
+
+  startChatModal.hidden = true;
+  startChatParticipantChatId = null;
+  startChatMode = StartChatMode.CHAT;
+  resetStartChatSelection();
+  updateStartChatModeUI();
+
+  if (
+    (!newContactModal || newContactModal.hidden) &&
+    (!profileModal || profileModal.hidden) &&
+    (!settingsModal || settingsModal.hidden) &&
+    (!newGroupModal || newGroupModal.hidden) &&
+    (!chatWallpaperModal || chatWallpaperModal.hidden) &&
+    (!callPlanModal || callPlanModal.hidden)
+  ) {
+    document.body.classList.remove("modal-open");
+  }
+
+  const restoreTarget = startChatRestoreFocusTo;
+  startChatRestoreFocusTo = null;
+
+  if (!restoreFocus) return;
+  if (restoreTarget instanceof HTMLElement) {
+    restoreTarget.focus();
+  } else {
+    const fallback = getStartChatFallbackTrigger();
+    if (fallback instanceof HTMLElement) {
+      fallback.focus();
+    }
+  }
+}
+
+function trapStartChatFocus(event) {
+  if (!startChatModal || startChatModal.hidden) return;
+  if (event.key !== "Tab") return;
+
+  const focusableSelectors =
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  const focusable = Array.from(startChatModal.querySelectorAll(focusableSelectors)).filter(
+    (element) =>
+      element instanceof HTMLElement &&
+      !element.hasAttribute("data-close-modal") &&
+      element.offsetParent !== null
+  );
+
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+
+  if (event.shiftKey) {
+    if (document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    }
+  } else if (document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+// When the modal runs in participant mode, we collect the pending selections and
+// merge them with the existing group list while keeping names unique.
+function commitStartChatSelections() {
+  if (startChatMode !== StartChatMode.PARTICIPANTS) {
+    closeStartChatModal();
+    return;
+  }
+
+  const chat = chats.find((candidate) => candidate.id === startChatParticipantChatId);
+  if (!chat || chat.type !== ChatType.GROUP) {
+    closeStartChatModal();
+    return;
+  }
+
+  const existingParticipants = normalizeGroupParticipants(chat.participants);
+  const existingKeys = new Set(existingParticipants.map((name) => name.toLowerCase()));
+  const additions = [];
+
+  startChatSelectedContacts.forEach((contact) => {
+    const normalized = normalizeContact(contact);
+    if (!normalized) return;
+    const displayName =
+      normalized.displayName ||
+      normalized.nickname ||
+      normalized.email ||
+      normalized.phoneDisplay ||
+      normalized.phone ||
+      "";
+    const trimmed = displayName.trim();
+    if (!trimmed) return;
+    const key = trimmed.toLowerCase();
+    if (existingKeys.has(key)) {
+      return;
+    }
+    existingKeys.add(key);
+    additions.push(trimmed);
+  });
+
+  if (!additions.length) {
+    showToast("Everyone is already in the group");
+    closeStartChatModal();
+    return;
+  }
+
+  chat.participants = [...existingParticipants, ...additions];
+  chat.status = deriveGroupStatus(chat.participants, chat.description ?? "");
+  saveState(chats);
+  renderChats(chatSearchInput.value);
+  renderChatView(chat);
+  showToast(`Added ${additions.length} participant${additions.length === 1 ? "" : "s"}`);
+  closeStartChatModal();
 }
 
 function trapNewContactFocus(event) {
@@ -7835,17 +8112,22 @@ function handleNewContactSubmit(event) {
   const contact = collectNewContactData({ strict: true, showErrors: true });
   if (!contact) return;
 
-  const { contact: storedContact } = upsertContact(contact);
-  const methodLabel = getContactMethodLabel(contact.method);
-  const result = openChatForContact(storedContact ?? contact, { showToastMessage: false });
-  if (result?.chat) {
-    const toastMessage = result.created
-      ? `Started a chat with ${result.chat.name} via ${methodLabel}`
-      : `You're chatting with ${result.chat.name}`;
-    showToast(toastMessage);
-  } else if (storedContact) {
-    showToast(`Saved ${storedContact.displayName} to contacts`);
-  }
+  const { contact: storedContact, added } = upsertContact(contact);
+  const savedContact = storedContact ?? contact;
+  const normalized = normalizeContact(savedContact);
+  const displayName =
+    normalized?.displayName ||
+    normalized?.nickname ||
+    normalized?.email ||
+    normalized?.phoneDisplay ||
+    normalized?.phone ||
+    "contact";
+
+  closeNewContactModal();
+  const toastMessage = added
+    ? `Saved ${displayName} to contacts`
+    : `Updated ${displayName}`;
+  showToast(toastMessage);
 }
 
 function resetNewGroupForm() {
@@ -7992,22 +8274,11 @@ function fallbackStartNewGroup() {
 function handleOpenNewChatList(event) {
   const trigger = event?.currentTarget instanceof HTMLElement ? event.currentTarget : null;
 
-  if (newContactModal && newContactForm) {
-    updateNewContactRestoreTarget(trigger);
-
-    if (newContactModal.hidden) {
-      openNewContactModal({
-        view: "list",
-        trigger,
-        context: NewContactModalContext.LIST,
-      });
-    } else {
-      setNewContactModalContext(NewContactModalContext.LIST);
-      if (newChatSearchInput) {
-        newChatSearchInput.value = "";
-      }
-      renderNewChatContacts();
-      showNewChatView("list");
+  if (startChatModal && newChatContactListElement) {
+    if (startChatModal.hidden || startChatMode !== StartChatMode.CHAT) {
+      openStartChatModal({ trigger, mode: StartChatMode.CHAT });
+    } else if (newChatSearchInput instanceof HTMLElement) {
+      newChatSearchInput.focus();
     }
     return;
   }
@@ -8019,23 +8290,8 @@ function handleAddContactButtonClick(event) {
   const trigger = event?.currentTarget instanceof HTMLElement ? event.currentTarget : null;
 
   if (newContactModal && newContactForm) {
-    updateNewContactRestoreTarget(trigger);
-
-    if (newContactModal.hidden) {
-      openNewContactModal({
-        view: "form",
-        method: ContactMethod.NICKNAME,
-        trigger,
-        context: NewContactModalContext.CONTACT,
-      });
-    } else {
-      setNewContactModalContext(NewContactModalContext.CONTACT);
-      if (newContactModal.dataset.context !== NewContactModalContext.CONTACT) {
-        resetNewContactForm();
-      }
-      showNewChatView("form", { focus: false });
-      setActiveContactMethod(ContactMethod.NICKNAME, { focus: true });
-    }
+    setActiveContactMethod(ContactMethod.NICKNAME, { focus: false });
+    openNewContactModal({ trigger, focus: true });
     return;
   }
 
@@ -8812,6 +9068,8 @@ function hydrate() {
   resumePendingStatuses();
   buildEmojiPicker();
   initializeAuthUI();
+  updateStartChatModeUI();
+  renderNewChatContacts();
 
   if (chatMessagesElement) {
     chatMessagesElement.addEventListener("scroll", () => {
@@ -8966,24 +9224,11 @@ function hydrate() {
   });
   if (newContactCancelButton) {
     newContactCancelButton.addEventListener("click", () => {
-      setNewContactModalContext(NewContactModalContext.LIST);
-      showNewChatView("list");
-      if (newChatSearchInput instanceof HTMLElement) {
-        newChatSearchInput.focus();
-      }
+      closeNewContactModal();
     });
   }
   if (newContactCloseButton) {
     newContactCloseButton.addEventListener("click", () => closeNewContactModal());
-  }
-  if (newContactBackButton) {
-    newContactBackButton.addEventListener("click", () => {
-      setNewContactModalContext(NewContactModalContext.LIST);
-      showNewChatView("list");
-      if (newChatSearchInput instanceof HTMLElement) {
-        newChatSearchInput.focus();
-      }
-    });
   }
   if (newContactModal) {
     newContactModal.addEventListener("click", (event) => {
@@ -8994,6 +9239,24 @@ function hydrate() {
     });
     newContactModal.addEventListener("keydown", trapNewContactFocus);
   }
+  if (startChatCloseButton) {
+    startChatCloseButton.addEventListener("click", () => closeStartChatModal());
+  }
+  if (newChatCancelButton) {
+    newChatCancelButton.addEventListener("click", () => closeStartChatModal());
+  }
+  if (newChatConfirmButton) {
+    newChatConfirmButton.addEventListener("click", () => commitStartChatSelections());
+  }
+  if (startChatModal) {
+    startChatModal.addEventListener("click", (event) => {
+      const target = event.target;
+      if (target instanceof HTMLElement && target.hasAttribute("data-close-modal")) {
+        closeStartChatModal();
+      }
+    });
+    startChatModal.addEventListener("keydown", trapStartChatFocus);
+  }
   if (newChatAddContactButton) {
     newChatAddContactButton.addEventListener("click", handleStartNewContact);
   }
@@ -9002,9 +9265,6 @@ function hydrate() {
   }
   if (newChatContactListElement) {
     newChatContactListElement.addEventListener("click", handleNewChatContactClick);
-  }
-  if (newContactModal) {
-    setNewContactModalContext(NewContactModalContext.LIST);
   }
   setActiveContactMethod(getActiveNewContactMethod());
 
@@ -9208,6 +9468,12 @@ function hydrate() {
     if (isEmojiPickerOpen) {
       event.preventDefault();
       closeEmojiPicker({ restoreFocus: true });
+      return;
+    }
+
+    if (startChatModal && !startChatModal.hidden) {
+      event.preventDefault();
+      closeStartChatModal();
       return;
     }
 
