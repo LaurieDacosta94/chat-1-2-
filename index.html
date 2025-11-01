@@ -287,16 +287,6 @@
           <button class="icon-button" id="toggle-archive" aria-label="Archive conversation">
             📁
           </button>
-          <button
-            class="icon-button"
-            id="delete-chat"
-            aria-label="Delete conversation"
-            title="Delete conversation"
-            aria-disabled="true"
-            disabled
-          >
-            🗑️
-          </button>
         </div>
       </header>
       <div class="chat__message-search" id="message-search" role="search" hidden aria-hidden="true">
@@ -550,22 +540,6 @@
             Search for someone already using the app or add a new username to start chatting
             right away.
           </p>
-          <fieldset class="new-contact__method">
-            <legend class="new-contact__method-title">Conversation type</legend>
-            <div class="new-contact__method-options">
-              <label class="new-contact__method-option">
-                <input type="radio" name="contact-method" value="nickname" checked />
-                <span>Direct message</span>
-              </label>
-              <label class="new-contact__method-option">
-                <input type="radio" name="contact-method" value="group" />
-                <span>Group chat</span>
-              </label>
-            </div>
-            <p class="new-contact__method-description">
-              Choose whether you want to start a one-on-one conversation or create a new group.
-            </p>
-          </fieldset>
           <div class="new-contact__fields" data-contact-fields="nickname">
             <label class="new-contact__field">
               <span class="new-contact__label">Username</span>
@@ -577,47 +551,6 @@
                 placeholder="Enter a username"
                 required
               />
-            </label>
-          </div>
-          <div class="new-contact__fields" data-contact-fields="group" hidden>
-            <label class="new-contact__field">
-              <span class="new-contact__label">Group name</span>
-              <input
-                type="text"
-                id="new-group-name"
-                name="group-name"
-                placeholder="Weekend plans"
-                disabled
-                required
-              />
-              <span class="new-contact__description">Visible to everyone in the group.</span>
-            </label>
-            <label class="new-contact__field">
-              <span class="new-contact__label">Participants</span>
-              <textarea
-                id="new-group-participants"
-                name="group-participants"
-                rows="3"
-                placeholder="Add one name or email per line"
-                disabled
-                required
-              ></textarea>
-              <span class="new-contact__description">
-                Add at least two participants. Separate names with commas or line breaks.
-              </span>
-            </label>
-            <label class="new-contact__field">
-              <span class="new-contact__label">Description (optional)</span>
-              <textarea
-                id="new-group-description"
-                name="group-description"
-                rows="2"
-                placeholder="What's this group about?"
-                disabled
-              ></textarea>
-              <span class="new-contact__description">
-                Appears under the group name to help everyone stay aligned.
-              </span>
             </label>
           </div>
           <div class="new-contact__lookup" id="new-contact-lookup" aria-live="polite">
