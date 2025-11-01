@@ -4962,14 +4962,19 @@ function renderChatView(chat) {
 
     messageNode.classList.remove("message--search-active");
     if (shouldHighlight) {
+      const hideMessage = !messageMatches;
+      // When the in-chat search is active we only surface matching messages, so
+      // toggle the `hidden` attribute instead of merely highlighting them.
       messageNode.classList.toggle("message--search-match", messageMatches);
-      messageNode.hidden = !messageMatches;
-      messageNode.setAttribute("aria-hidden", messageMatches ? "false" : "true");
-      if (messageMatches) {
+      messageNode.toggleAttribute("hidden", hideMessage);
+      messageNode.hidden = hideMessage;
+      messageNode.setAttribute("aria-hidden", hideMessage ? "true" : "false");
+      if (!hideMessage) {
         matchesForChat.push({ element: messageNode });
       }
     } else {
       messageNode.classList.remove("message--search-match");
+      messageNode.removeAttribute("hidden");
       messageNode.hidden = false;
       messageNode.setAttribute("aria-hidden", "false");
     }
