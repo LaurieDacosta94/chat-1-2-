@@ -166,11 +166,11 @@
         aria-label="Open profile"
       >
         <div class="sidebar__profile-avatar" id="user-profile-avatar" aria-hidden="true">
-          JT
+          YOU
         </div>
         <div class="sidebar__profile-details">
-          <span class="sidebar__profile-name" id="user-profile-name">Jordan Taylor</span>
-          <span class="sidebar__profile-about" id="user-profile-about">Available</span>
+          <span class="sidebar__profile-name" id="user-profile-name">You</span>
+          <span class="sidebar__profile-about" id="user-profile-about">Add a status message</span>
         </div>
       </button>
       <div class="sidebar__search">
@@ -270,6 +270,16 @@
             title="Search in conversation"
           >
             🔍
+          </button>
+          <button
+            class="icon-button"
+            id="customize-chat-wallpaper"
+            aria-label="Customize chat wallpaper"
+            aria-disabled="true"
+            title="Customize chat wallpaper"
+            disabled
+          >
+            🖼️
           </button>
           <button class="icon-button" id="toggle-star" aria-label="Star conversation">
             ⭐
@@ -580,10 +590,10 @@
       </header>
       <form class="profile" id="profile-form">
         <div class="profile__header">
-          <div class="profile__avatar" id="profile-modal-avatar" aria-hidden="true">JT</div>
+          <div class="profile__avatar" id="profile-modal-avatar" aria-hidden="true">YOU</div>
           <div class="profile__summary">
-            <div class="profile__summary-name" id="profile-summary-name">Jordan Taylor</div>
-            <div class="profile__summary-about" id="profile-summary-about">Available</div>
+            <div class="profile__summary-name" id="profile-summary-name">You</div>
+            <div class="profile__summary-about" id="profile-summary-about">Add a status message</div>
           </div>
         </div>
         <div class="profile__fields">
@@ -712,6 +722,93 @@
           </p>
           <button type="button" class="settings__sign-out" id="sign-out-button">
             Sign out
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div
+    class="modal"
+    id="chat-wallpaper-modal"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="chat-wallpaper-title"
+    hidden
+  >
+    <div class="modal__backdrop" data-close-modal></div>
+    <div class="modal__content" role="document">
+      <header class="modal__header">
+        <h2 class="modal__title" id="chat-wallpaper-title">Chat wallpaper</h2>
+        <button
+          class="icon-button modal__close"
+          id="chat-wallpaper-close"
+          aria-label="Close chat wallpaper settings"
+        >
+          ✕
+        </button>
+      </header>
+      <form class="chat-wallpaper" id="chat-wallpaper-form">
+        <fieldset class="chat-wallpaper__section">
+          <legend class="chat-wallpaper__legend">Choose wallpaper</legend>
+          <label class="settings__option chat-wallpaper__option">
+            <input type="radio" name="chat-wallpaper" value="default" />
+            <span class="chat-wallpaper__option-text">
+              <span class="chat-wallpaper__option-title">Use app wallpaper</span>
+              <span class="chat-wallpaper__option-description"
+                >Follow your global wallpaper preference.</span
+              >
+            </span>
+          </label>
+          <label class="settings__option settings__option--wallpaper chat-wallpaper__option">
+            <input type="radio" name="chat-wallpaper" value="grid" />
+            <span class="settings__option-preview settings__option-preview--grid" aria-hidden="true"></span>
+            <span class="settings__option-text">
+              <span class="settings__option-title">Classic grid</span>
+              <span class="settings__option-description"
+                >WhatsApp-inspired textured background.</span
+              >
+            </span>
+          </label>
+          <label class="settings__option settings__option--wallpaper chat-wallpaper__option">
+            <input type="radio" name="chat-wallpaper" value="aurora" />
+            <span class="settings__option-preview settings__option-preview--aurora" aria-hidden="true"></span>
+            <span class="settings__option-text">
+              <span class="settings__option-title">Aurora</span>
+              <span class="settings__option-description">Soft gradients with calming colors.</span>
+            </span>
+          </label>
+          <label class="settings__option settings__option--wallpaper chat-wallpaper__option">
+            <input type="radio" name="chat-wallpaper" value="bloom" />
+            <span class="settings__option-preview settings__option-preview--bloom" aria-hidden="true"></span>
+            <span class="settings__option-text">
+              <span class="settings__option-title">Bloom</span>
+              <span class="settings__option-description">Vibrant tones with a floral touch.</span>
+            </span>
+          </label>
+          <label class="settings__option settings__option--wallpaper chat-wallpaper__option">
+            <input type="radio" name="chat-wallpaper" value="none" />
+            <span class="settings__option-preview settings__option-preview--none" aria-hidden="true"></span>
+            <span class="settings__option-text">
+              <span class="settings__option-title">No wallpaper</span>
+              <span class="settings__option-description">Keep things minimal with a solid background.</span>
+            </span>
+          </label>
+        </fieldset>
+        <div class="chat-wallpaper__actions">
+          <button
+            type="button"
+            class="chat-wallpaper__button chat-wallpaper__button--secondary"
+            id="chat-wallpaper-use-default"
+          >
+            Use app wallpaper
+          </button>
+          <button
+            type="submit"
+            class="chat-wallpaper__button chat-wallpaper__button--primary"
+            id="chat-wallpaper-apply"
+          >
+            Apply
           </button>
         </div>
       </form>

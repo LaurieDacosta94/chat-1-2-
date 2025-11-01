@@ -28,6 +28,7 @@ const chatSearchInput = document.getElementById("chat-search");
 const newChatButton = document.getElementById("new-chat-button");
 const toggleStarButton = document.getElementById("toggle-star");
 const toggleArchiveButton = document.getElementById("toggle-archive");
+const chatWallpaperButton = document.getElementById("customize-chat-wallpaper");
 const filterChips = Array.from(document.querySelectorAll(".filter-chip"));
 const filterCountElements = {
   all: document.querySelector('[data-filter-count="all"]'),
@@ -105,6 +106,14 @@ const callPlanCloseButton = document.getElementById("call-plan-close");
 const callPlanCancelButton = document.getElementById("call-plan-cancel");
 const callPlanSummaryElement = document.getElementById("call-plan-summary");
 const callPlanConfirmButton = document.getElementById("call-plan-confirm");
+const chatWallpaperModal = document.getElementById("chat-wallpaper-modal");
+const chatWallpaperCloseButton = document.getElementById("chat-wallpaper-close");
+const chatWallpaperForm = document.getElementById("chat-wallpaper-form");
+const chatWallpaperUseDefaultButton = document.getElementById("chat-wallpaper-use-default");
+const chatWallpaperApplyButton = document.getElementById("chat-wallpaper-apply");
+const chatWallpaperOptions = chatWallpaperForm
+  ? Array.from(chatWallpaperForm.querySelectorAll('input[name="chat-wallpaper"]'))
+  : [];
 const callOverlayElement = document.getElementById("call-overlay");
 const callOverlayBackdrop = document.getElementById("call-overlay-backdrop");
 const callOverlayCloseButton = document.getElementById("call-overlay-close");
@@ -135,6 +144,7 @@ const STORAGE_KEY = "whatsapp-clone-state-v1";
 const DRAFTS_STORAGE_KEY = "whatsapp-clone-drafts-v1";
 const THEME_STORAGE_KEY = "whatsapp-clone-theme";
 const WALLPAPER_STORAGE_KEY = "whatsapp-clone-wallpaper";
+const CHAT_WALLPAPER_OVERRIDES_STORAGE_KEY = "whatsapp-clone-chat-wallpaper-overrides-v1";
 const ATTACHMENT_DRAFTS_STORAGE_KEY = "whatsapp-clone-attachment-drafts-v1";
 const PROFILE_STORAGE_KEY = "whatsapp-clone-profile-v1";
 const AUTH_STORAGE_KEY = "whatsapp-clone-auth-v1";
@@ -148,6 +158,7 @@ const sessionStore = {
   attachmentDrafts: {},
   contacts: [],
   profile: null,
+  chatWallpapers: {},
 };
 
 let liveSessionStorage = null;
@@ -254,6 +265,7 @@ const LIVE_SESSION_STORAGE_KEYS = [
   ATTACHMENT_DRAFTS_STORAGE_KEY,
   PROFILE_STORAGE_KEY,
   CONTACTS_STORAGE_KEY,
+  CHAT_WALLPAPER_OVERRIDES_STORAGE_KEY,
 ];
 
 function clearLiveSessionValues(auth = authState) {
@@ -380,9 +392,9 @@ const CONTACT_STATUS_MAX_LENGTH = 140;
 const NEW_CONTACT_MAX_SOURCE_LENGTH = 2000;
 
 const defaultProfile = {
-  name: "Jordan Taylor",
-  about: "Available",
-  phone: "+1 (555) 010-3498",
+  name: "",
+  about: "",
+  phone: "",
 };
 
 const MessageStatus = {
@@ -407,132 +419,12 @@ const realtimeState = {
   serverMessageIds: new Map(),
   pendingOutgoing: new Map(),
   pendingOutbound: [],
+  pendingReceipts: [],
 };
 
 let hasLoggedMissingSocketClient = false;
+let chatWallpaperOverrides = {};
 
-const initialData = [
-  {
-    id: "team",
-    name: "Product Team",
-    status: "last seen recently",
-    avatar: "PT",
-    isStarred: true,
-    isArchived: false,
-    type: ChatType.GROUP,
-    participants: [
-      "Jordan Taylor",
-      "Avery Shaw",
-      "Mia Chen",
-      "Sam Patel",
-      "Luis Gomez",
-    ],
-    description: "Sprint planning crew",
-    capabilities: { audio: true, video: true, phone: false },
-    messages: [
-      {
-        id: "m1",
-        text: "Hey team! Stand-up in 10 minutes.",
-        direction: "outgoing",
-        sentAt: "2024-02-21T09:20:00.000Z",
-        timestamp: "09:20",
-        status: "read",
-      },
-      {
-        id: "m2",
-        text: "On my way!",
-        direction: "incoming",
-        sentAt: "2024-02-21T09:21:00.000Z",
-        timestamp: "09:21",
-      },
-      {
-        id: "m3",
-        text: "Don't forget to review the sprint board before the call.",
-        direction: "outgoing",
-        sentAt: "2024-02-21T09:24:00.000Z",
-        timestamp: "09:24",
-        status: "read",
-      },
-    ],
-  },
-  {
-    id: "design",
-    name: "Design Studio",
-    status: "typing...",
-    avatar: "DS",
-    isStarred: false,
-    isArchived: false,
-    type: ChatType.GROUP,
-    participants: ["Jordan Taylor", "Nora Ellis", "Kai Morgan", "Priya Das"],
-    description: "Concept feedback",
-    capabilities: { audio: true, video: true, phone: false },
-    messages: [
-      {
-        id: "m4",
-        text: "Sharing the latest mockups in the drive.",
-        direction: "incoming",
-        sentAt: "2024-02-20T08:55:00.000Z",
-        timestamp: "08:55",
-      },
-      {
-        id: "m5",
-        text: "Looks awesome! I'll review and comment.",
-        direction: "outgoing",
-        sentAt: "2024-02-20T09:02:00.000Z",
-        timestamp: "09:02",
-        status: "read",
-      },
-    ],
-  },
-  {
-    id: "james",
-    name: "James Carter",
-    status: "online",
-    avatar: "JC",
-    isStarred: false,
-    isArchived: false,
-    type: ChatType.DIRECT,
-    capabilities: { audio: true, video: true, phone: true },
-    messages: [
-      {
-        id: "m6",
-        text: "Lunch today? There's a new place nearby.",
-        direction: "incoming",
-        sentAt: "2024-02-21T09:45:00.000Z",
-        timestamp: "09:45",
-      },
-    ],
-  },
-  {
-    id: "family",
-    name: "Family",
-    status: "last seen 2h ago",
-    avatar: "F",
-    isStarred: false,
-    isArchived: false,
-    type: ChatType.GROUP,
-    participants: ["Jordan Taylor", "Mom", "Dad", "Alex", "Grandma"],
-    description: "Weekend getaway",
-    capabilities: { audio: true, video: true, phone: false },
-    messages: [
-      {
-        id: "m7",
-        text: "We booked tickets for the weekend getaway!",
-        direction: "incoming",
-        sentAt: "2024-02-19T08:40:00.000Z",
-        timestamp: "08:40",
-      },
-      {
-        id: "m8",
-        text: "Amazing! Can't wait to see everyone.",
-        direction: "outgoing",
-        sentAt: "2024-02-19T08:41:00.000Z",
-        timestamp: "08:41",
-        status: "read",
-      },
-    ],
-  },
-];
 
 const Filter = {
   ALL: "all",
@@ -1787,6 +1679,7 @@ function resetSessionStore() {
   sessionStore.attachmentDrafts = {};
   sessionStore.contacts = [];
   sessionStore.profile = null;
+  sessionStore.chatWallpapers = {};
 }
 
 function readNamespacedStorage(key) {
@@ -1851,21 +1744,10 @@ function loadState() {
       sessionStore.chats = normalized.map((chat) => ({ ...chat }));
       return normalized;
     }
-    if (namespace === STORAGE_NAMESPACE_DEFAULT) {
-      const normalized = initialData.map(normalizeChat).filter(Boolean);
-      sessionStore.chats = normalized.map((chat) => ({ ...chat }));
-      return normalized;
-    }
     sessionStore.chats = [];
     return [];
   } catch (error) {
     console.error("Failed to load chats", error);
-    const namespace = getStorageNamespace();
-    if (namespace === STORAGE_NAMESPACE_DEFAULT) {
-      const normalized = initialData.map(normalizeChat).filter(Boolean);
-      sessionStore.chats = normalized.map((chat) => ({ ...chat }));
-      return normalized;
-    }
     sessionStore.chats = [];
     return [];
   }
@@ -1874,6 +1756,7 @@ function loadState() {
 function saveState(state) {
   const normalized = (state ?? []).map(normalizeChat).filter(Boolean);
   sessionStore.chats = normalized.map((chat) => ({ ...chat }));
+  pruneChatWallpaperOverrides();
   if (isLiveMessagingSession()) {
     writeLiveSessionValue(STORAGE_KEY, normalized);
     return;
@@ -2151,9 +2034,9 @@ function isAuthenticated() {
 
 function getInitials(name = "") {
   const trimmed = name.trim();
-  if (!trimmed) return "JT";
+  if (!trimmed) return "YOU";
   const parts = trimmed.split(/\s+/).filter(Boolean);
-  if (!parts.length) return "JT";
+  if (!parts.length) return "YOU";
   if (parts.length === 1) {
     return parts[0].slice(0, 2).toUpperCase();
   }
@@ -2179,6 +2062,8 @@ function populateProfileForm(profile = activeProfile) {
 function updateProfileUI(profile = activeProfile) {
   const nextProfile = profile ?? activeProfile ?? { ...defaultProfile };
   const initials = getInitials(nextProfile.name);
+  const displayName = nextProfile.name?.trim() || "You";
+  const aboutCopy = nextProfile.about?.trim() || "Add a status message";
 
   if (profileAvatarElement) {
     profileAvatarElement.textContent = initials;
@@ -2187,12 +2072,11 @@ function updateProfileUI(profile = activeProfile) {
     profileModalAvatarElement.textContent = initials;
   }
   if (profileNameElement) {
-    profileNameElement.textContent = nextProfile.name;
+    profileNameElement.textContent = displayName;
   }
   if (profileSummaryNameElement) {
-    profileSummaryNameElement.textContent = nextProfile.name;
+    profileSummaryNameElement.textContent = displayName;
   }
-  const aboutCopy = nextProfile.about?.trim() || defaultProfile.about;
   if (profileAboutElement) {
     profileAboutElement.textContent = aboutCopy;
   }
@@ -2200,8 +2084,13 @@ function updateProfileUI(profile = activeProfile) {
     profileSummaryAboutElement.textContent = aboutCopy;
   }
   if (profileButton) {
-    profileButton.setAttribute("aria-label", `Open profile for ${nextProfile.name}`);
-    profileButton.title = `${nextProfile.name}'s profile`;
+    if (displayName === "You") {
+      profileButton.setAttribute("aria-label", "Open your profile");
+      profileButton.title = "Your profile";
+    } else {
+      profileButton.setAttribute("aria-label", `Open profile for ${displayName}`);
+      profileButton.title = `${displayName}'s profile`;
+    }
   }
 }
 
@@ -2478,6 +2367,34 @@ function flushPendingOutbound() {
   });
 }
 
+function flushPendingReceipts() {
+  const socket = realtimeState.socket;
+  if (!socket || !socket.connected || !realtimeState.isAuthenticated) {
+    return;
+  }
+
+  if (!realtimeState.pendingReceipts.length) {
+    return;
+  }
+
+  const queued = realtimeState.pendingReceipts.splice(0);
+  queued.forEach((entry) => {
+    if (!entry || !entry.chatId || !Array.isArray(entry.messageIds)) {
+      return;
+    }
+    const normalizedChatId = normalizeChatIdentifier(entry.chatId);
+    const messageIds = entry.messageIds.map(String).filter(Boolean);
+    if (!normalizedChatId || !messageIds.length) {
+      return;
+    }
+    try {
+      socket.emit("messagesRead", { chat_id: normalizedChatId, message_ids: messageIds });
+    } catch (error) {
+      console.error("Failed to flush queued read receipts", error);
+    }
+  });
+}
+
 function handleRealtimeConnect() {
   const socket = realtimeState.socket;
   if (!socket) return;
@@ -2493,6 +2410,7 @@ function handleRealtimeAuthenticated() {
   realtimeState.activeToken = realtimeState.pendingAuthToken ?? authState?.token ?? realtimeState.activeToken;
   flushPendingChatJoins();
   flushPendingOutbound();
+  flushPendingReceipts();
 }
 
 function handleRealtimeAuthError(payload) {
@@ -2548,6 +2466,66 @@ function handleRealtimeMessage(payload) {
   applyServerMessages(chatId, [payload], { origin: "realtime" });
 }
 
+function handleRealtimeMessagesRead(payload) {
+  const chatId = normalizeChatIdentifier(payload?.chat_id);
+  if (!chatId) {
+    return;
+  }
+  const readerId = normalizeAccountId(payload?.reader_id);
+  if (!readerId) {
+    return;
+  }
+  const messageIds = Array.isArray(payload?.message_ids)
+    ? payload.message_ids.map((value) => {
+        if (value === null || value === undefined) {
+          return null;
+        }
+        return String(value);
+      })
+    : [];
+  const normalizedIds = messageIds.filter(Boolean);
+  if (!normalizedIds.length) {
+    return;
+  }
+
+  const chat = chats.find((candidate) => candidate.id === chatId);
+  if (!chat) {
+    return;
+  }
+
+  const idSet = new Set(normalizedIds);
+  let mutated = false;
+
+  chat.messages.forEach((message) => {
+    if (!message || message.direction !== "outgoing") {
+      return;
+    }
+    const serverId = message.serverId !== undefined && message.serverId !== null ? String(message.serverId) : null;
+    if (!serverId || !idSet.has(serverId)) {
+      return;
+    }
+    const previousStatus = message.status;
+    const previousReadBy = Array.isArray(message.readBy) ? [...message.readBy] : [];
+    applyReadReceiptsToMessage(chat, message, [readerId]);
+    const nextReadBy = Array.isArray(message.readBy) ? message.readBy : [];
+    const statusChanged = previousStatus !== message.status;
+    const readByChanged =
+      nextReadBy.length !== previousReadBy.length ||
+      previousReadBy.some((value) => !nextReadBy.includes(value));
+    if (statusChanged || readByChanged) {
+      mutated = true;
+    }
+  });
+
+  if (mutated) {
+    saveState(chats);
+    renderChats(chatSearchInput.value);
+    if (activeChatId === chatId) {
+      renderChatView(chat);
+    }
+  }
+}
+
 function handleRealtimeMessageError(payload) {
   const message =
     typeof payload?.error === "string" && payload.error.trim()
@@ -2601,6 +2579,7 @@ function ensureRealtimeSocket() {
     const socket = window.io(API_BASE_URL, {
       autoConnect: false,
       transports: ["websocket", "polling"],
+      maxPayload: 25 * 1024 * 1024,
     });
     realtimeState.socket = socket;
     socket.on("connect", handleRealtimeConnect);
@@ -2608,6 +2587,7 @@ function ensureRealtimeSocket() {
     socket.on("authError", handleRealtimeAuthError);
     socket.on("chatHistory", handleRealtimeChatHistory);
     socket.on("message", handleRealtimeMessage);
+    socket.on("messagesRead", handleRealtimeMessagesRead);
     socket.on("messageError", handleRealtimeMessageError);
     socket.on("chatError", handleRealtimeChatError);
     socket.on("disconnect", handleRealtimeDisconnect);
@@ -2629,6 +2609,7 @@ function disconnectRealtime({ keepSocket = true } = {}) {
   realtimeState.pendingOutbound = [];
   realtimeState.serverMessageIds.clear();
   realtimeState.pendingOutgoing.clear();
+  realtimeState.pendingReceipts = [];
 
   const socket = realtimeState.socket;
   if (!socket) {
@@ -2765,6 +2746,63 @@ function parseServerMessageContent(rawContent) {
   return { text: "", attachments: [] };
 }
 
+function normalizeReadReceiptList(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  const seen = new Set();
+  values.forEach((value) => {
+    const normalized = normalizeAccountId(value);
+    if (normalized) {
+      seen.add(normalized);
+    }
+  });
+  return Array.from(seen);
+}
+
+function mergeReadReceiptLists(existing = [], incoming = []) {
+  const merged = new Set();
+  (Array.isArray(existing) ? existing : []).forEach((value) => {
+    const normalized = normalizeAccountId(value);
+    if (normalized) {
+      merged.add(normalized);
+    }
+  });
+  (Array.isArray(incoming) ? incoming : []).forEach((value) => {
+    const normalized = normalizeAccountId(value);
+    if (normalized) {
+      merged.add(normalized);
+    }
+  });
+  return Array.from(merged);
+}
+
+function shouldMarkMessageReadForChatByList(chat, readByList) {
+  if (!chat || !Array.isArray(readByList) || !readByList.length) {
+    return false;
+  }
+  if (chat.type === ChatType.GROUP) {
+    return true;
+  }
+  const contactAccountId = getContactAccountId(chat.contact);
+  const normalizedRecipient = normalizeAccountId(contactAccountId);
+  if (!normalizedRecipient) {
+    return readByList.length > 0;
+  }
+  return readByList.includes(normalizedRecipient);
+}
+
+function applyReadReceiptsToMessage(chat, message, readByList = []) {
+  if (!message) {
+    return;
+  }
+  const merged = mergeReadReceiptLists(message.readBy, readByList);
+  message.readBy = merged;
+  if (message.direction === "outgoing" && shouldMarkMessageReadForChatByList(chat, merged)) {
+    message.status = MessageStatus.READ;
+  }
+}
+
 function buildLocalMessageFromServer(chatId, payload) {
   if (!payload || typeof payload !== "object") {
     return null;
@@ -2776,6 +2814,7 @@ function buildLocalMessageFromServer(chatId, payload) {
   const timestamp = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
   const senderId = payload.sender_id ?? null;
   const direction = senderId !== null && authState?.user?.id === senderId ? "outgoing" : "incoming";
+  const readBy = normalizeReadReceiptList(payload.read_by);
 
   const message = {
     id:
@@ -2792,6 +2831,7 @@ function buildLocalMessageFromServer(chatId, payload) {
     serverId: payload.id !== undefined && payload.id !== null ? String(payload.id) : null,
     clientId: typeof payload.client_id === "string" && payload.client_id ? payload.client_id : null,
     senderId,
+    readBy,
   };
 
   if (direction === "outgoing") {
@@ -2978,6 +3018,7 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false, 
           id: preservedId,
           attachments: nextAttachments,
         });
+        applyReadReceiptsToMessage(chat, existing, normalizedMessage.readBy);
         serverMessageIds.add(normalizedMessage.serverId);
         if (normalizedMessage.clientId) {
           realtimeState.pendingOutgoing.delete(normalizedMessage.clientId);
@@ -3003,6 +3044,7 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false, 
             id: existing.id,
             attachments: nextAttachments,
           });
+          applyReadReceiptsToMessage(chat, existing, normalizedMessage.readBy);
           if (normalizedMessage.serverId && serverMessageIds) {
             existing.serverId = normalizedMessage.serverId;
             serverMessageIds.add(normalizedMessage.serverId);
@@ -3031,6 +3073,7 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false, 
       ...normalizedMessage,
       id: assignedId,
     };
+    applyReadReceiptsToMessage(chat, messageToInsert, normalizedMessage.readBy);
     chat.messages.push(messageToInsert);
     if (normalizedMessage.serverId && serverMessageIds) {
       serverMessageIds.add(normalizedMessage.serverId);
@@ -3365,6 +3408,8 @@ function reloadStateForActiveUser({ preserveChat = false } = {}) {
   drafts = loadDrafts();
   attachmentDrafts = loadAttachmentDrafts();
   contacts = sortContacts(loadContacts());
+  chatWallpaperOverrides = loadChatWallpaperOverrides();
+  pruneChatWallpaperOverrides();
   syncContactsFromChats();
   activeProfile = loadProfile();
   updateProfileUI(activeProfile);
@@ -3386,6 +3431,7 @@ function reloadStateForActiveUser({ preserveChat = false } = {}) {
     openChat(previousChatId);
   } else {
     renderChatView(null);
+    applyChatWallpaper(null);
   }
   renderComposerAttachments();
   resumePendingStatuses();
@@ -3646,7 +3692,7 @@ function setTheme(theme) {
   if (activeTheme === nextTheme) return;
   activeTheme = nextTheme;
   applyTheme(activeTheme);
-  applyWallpaper(activeWallpaper);
+  applyChatWallpaper(activeChatId);
   updateThemeControls(activeTheme);
   saveTheme(activeTheme);
   showToast(
@@ -3667,7 +3713,11 @@ function loadWallpaper() {
 }
 
 function saveWallpaper(wallpaper) {
-  localStorage.setItem(WALLPAPER_STORAGE_KEY, wallpaper);
+  try {
+    localStorage.setItem(WALLPAPER_STORAGE_KEY, wallpaper);
+  } catch (error) {
+    console.warn("Failed to persist wallpaper preference", error);
+  }
 }
 
 function applyWallpaper(wallpaper) {
@@ -3689,7 +3739,7 @@ function setWallpaper(wallpaper) {
     : Wallpaper.GRID;
   if (activeWallpaper === nextWallpaper) return;
   activeWallpaper = nextWallpaper;
-  applyWallpaper(activeWallpaper);
+  applyChatWallpaper(activeChatId);
   updateWallpaperControls(activeWallpaper);
   saveWallpaper(activeWallpaper);
   const copy = {
@@ -3700,6 +3750,126 @@ function setWallpaper(wallpaper) {
   }[activeWallpaper];
   if (copy) {
     showToast(copy);
+  }
+}
+
+function sanitizeChatWallpaperOverrides(value) {
+  if (typeof value !== "object" || value === null) {
+    return {};
+  }
+  const entries = Object.entries(value)
+    .map(([chatId, wallpaper]) => {
+      const normalizedId = typeof chatId === "string" ? chatId.trim() : "";
+      const sanitizedWallpaper = Object.values(Wallpaper).includes(wallpaper)
+        ? wallpaper
+        : null;
+      if (!normalizedId || !sanitizedWallpaper) {
+        return null;
+      }
+      return [normalizedId, sanitizedWallpaper];
+    })
+    .filter(Boolean);
+  return Object.fromEntries(entries);
+}
+
+function loadChatWallpaperOverrides() {
+  if (isLiveMessagingSession()) {
+    const stored = readLiveSessionValue(CHAT_WALLPAPER_OVERRIDES_STORAGE_KEY);
+    if (stored && typeof stored === "object") {
+      const sanitized = sanitizeChatWallpaperOverrides(stored);
+      sessionStore.chatWallpapers = { ...sanitized };
+      chatWallpaperOverrides = sanitized;
+      return sanitized;
+    }
+    sessionStore.chatWallpapers = {};
+    chatWallpaperOverrides = {};
+    return {};
+  }
+
+  try {
+    const namespace = getStorageNamespace();
+    const store = readNamespacedStorage(CHAT_WALLPAPER_OVERRIDES_STORAGE_KEY);
+    const raw = store[namespace];
+    if (raw && typeof raw === "object") {
+      const sanitized = sanitizeChatWallpaperOverrides(raw);
+      sessionStore.chatWallpapers = { ...sanitized };
+      chatWallpaperOverrides = sanitized;
+      return sanitized;
+    }
+  } catch (error) {
+    console.error("Failed to load chat wallpaper overrides", error);
+  }
+
+  sessionStore.chatWallpapers = {};
+  chatWallpaperOverrides = {};
+  return {};
+}
+
+function saveChatWallpaperOverrides(overrides) {
+  const sanitized = sanitizeChatWallpaperOverrides(overrides);
+  chatWallpaperOverrides = sanitized;
+  sessionStore.chatWallpapers = { ...sanitized };
+
+  if (isLiveMessagingSession()) {
+    writeLiveSessionValue(CHAT_WALLPAPER_OVERRIDES_STORAGE_KEY, sanitized);
+    return;
+  }
+
+  const namespace = getStorageNamespace();
+  if (!Object.keys(sanitized).length) {
+    deleteNamespacedStorage(CHAT_WALLPAPER_OVERRIDES_STORAGE_KEY, namespace);
+    return;
+  }
+  writeNamespacedStorage(CHAT_WALLPAPER_OVERRIDES_STORAGE_KEY, namespace, sanitized);
+}
+
+function getChatWallpaperOverride(chatId) {
+  const normalized = normalizeChatIdentifier(chatId);
+  if (!normalized) {
+    return null;
+  }
+  const override = chatWallpaperOverrides[normalized];
+  return Object.values(Wallpaper).includes(override) ? override : null;
+}
+
+function getEffectiveWallpaperForChat(chatId) {
+  const override = chatId ? getChatWallpaperOverride(chatId) : null;
+  return override ?? activeWallpaper;
+}
+
+function applyChatWallpaper(chatId = activeChatId) {
+  const wallpaper = getEffectiveWallpaperForChat(chatId);
+  applyWallpaper(wallpaper);
+}
+
+function setChatWallpaperOverride(chatId, wallpaper) {
+  const normalized = normalizeChatIdentifier(chatId);
+  if (!normalized) {
+    return;
+  }
+  const nextOverrides = { ...chatWallpaperOverrides };
+  if (Object.values(Wallpaper).includes(wallpaper)) {
+    nextOverrides[normalized] = wallpaper;
+  } else {
+    delete nextOverrides[normalized];
+  }
+  saveChatWallpaperOverrides(nextOverrides);
+  if (normalized === activeChatId) {
+    applyChatWallpaper(normalized);
+  }
+}
+
+function clearChatWallpaperOverride(chatId) {
+  setChatWallpaperOverride(chatId, null);
+}
+
+function pruneChatWallpaperOverrides() {
+  const knownChatIds = new Set(chats.map((chat) => chat.id));
+  const nextOverrides = Object.fromEntries(
+    Object.entries(chatWallpaperOverrides).filter(([chatId]) => knownChatIds.has(chatId))
+  );
+  if (Object.keys(nextOverrides).length !== Object.keys(chatWallpaperOverrides).length) {
+    saveChatWallpaperOverrides(nextOverrides);
   }
 }
 
@@ -3744,6 +3914,7 @@ let chats = loadState();
 let drafts = loadDrafts();
 let attachmentDrafts = loadAttachmentDrafts();
 let contacts = sortContacts(loadContacts());
+chatWallpaperOverrides = loadChatWallpaperOverrides();
 let activeProfile = loadProfile();
 if (authState) {
   applyAuthenticatedUserToProfile(authState, { persist: false });
@@ -3995,9 +4166,12 @@ function renderChats(searchText = "") {
     .filter((chat) => {
       if (!normalizedSearch) return true;
       const nameMatch = chat.name.toLowerCase().includes(normalizedSearch);
-      const messageMatch = chat.messages.some((message) =>
-        message.text.toLowerCase().includes(normalizedSearch)
-      );
+      const messageMatch = chat.messages.some((message) => {
+        if (!message || typeof message.text !== "string") {
+          return false;
+        }
+        return message.text.toLowerCase().includes(normalizedSearch);
+      });
       return nameMatch || messageMatch;
     })
     .sort((a, b) => {
@@ -4350,6 +4524,66 @@ function renderComposerAttachments() {
   });
 }
 
+function queueReadReceipts(chatId, messageIds) {
+  const normalizedChatId = normalizeChatIdentifier(chatId);
+  if (!normalizedChatId) {
+    return;
+  }
+  const uniqueIds = Array.from(
+    new Set((Array.isArray(messageIds) ? messageIds : []).map((value) => (value ? String(value) : "")).filter(Boolean))
+  );
+  if (!uniqueIds.length) {
+    return;
+  }
+
+  const socket = ensureRealtimeSocket();
+  if (socket && realtimeState.isAuthenticated && socket.connected) {
+    try {
+      socket.emit("messagesRead", { chat_id: normalizedChatId, message_ids: uniqueIds });
+      return;
+    } catch (error) {
+      console.error("Failed to send read receipts", error);
+    }
+  }
+
+  realtimeState.pendingReceipts.push({ chatId: normalizedChatId, messageIds: uniqueIds });
+  if (realtimeState.pendingReceipts.length > 200) {
+    realtimeState.pendingReceipts.shift();
+  }
+}
+
+function markChatMessagesAsRead(chat) {
+  if (!chat || !isChatInFocus(chat)) {
+    return;
+  }
+  const unreadMessages = (chat.messages ?? []).filter(
+    (message) =>
+      message &&
+      message.direction === "incoming" &&
+      !message.readAt &&
+      message.serverId !== undefined &&
+      message.serverId !== null
+  );
+  if (!unreadMessages.length) {
+    return;
+  }
+
+  const timestamp = new Date().toISOString();
+  const messageIds = unreadMessages
+    .map((message) => {
+      message.readAt = timestamp;
+      return String(message.serverId);
+    })
+    .filter(Boolean);
+
+  if (!messageIds.length) {
+    return;
+  }
+
+  queueReadReceipts(chat.id, messageIds);
+  saveState(chats);
+}
+
 function updateCallControls(chat) {
   const type = chat?.type ?? ChatType.DIRECT;
   const capabilities = chat?.capabilities ?? {};
@@ -4404,6 +4638,17 @@ function updateCallControls(chat) {
 }
 
 function renderChatView(chat) {
+  if (chatWallpaperButton) {
+    const hasChat = Boolean(chat);
+    chatWallpaperButton.disabled = !hasChat;
+    chatWallpaperButton.setAttribute("aria-disabled", hasChat ? "false" : "true");
+    const label = hasChat
+      ? `Customize wallpaper for ${chat.name}`
+      : "Customize chat wallpaper";
+    chatWallpaperButton.setAttribute("aria-label", label);
+    chatWallpaperButton.setAttribute("title", label);
+  }
+
   if (!chat) {
     if (exportChatButton) {
       exportChatButton.disabled = true;
@@ -4620,6 +4865,7 @@ function renderChatView(chat) {
   messageInput.value = draftValue;
   autoResizeTextarea();
   renderComposerAttachments();
+  markChatMessagesAsRead(chat);
 }
 
 function openChat(chatId) {
@@ -4644,6 +4890,7 @@ function openChat(chatId) {
   if (chat) {
     joinChatRealtime(chat.id);
   }
+  applyChatWallpaper(chat?.id ?? null);
   if (isMessageSearchOpen) {
     focusMessageSearchInput();
   }
@@ -4672,6 +4919,7 @@ function addMessageToChat(chatId, text, direction = "outgoing", attachments = []
     ...(isOutgoing ? { status: MessageStatus.SENT } : {}),
     serverId: null,
     clientId: null,
+    readBy: isOutgoing ? [] : undefined,
   };
   if (isOutgoing && authState?.user?.id !== undefined) {
     newMessage.senderId = authState.user.id;
@@ -5377,6 +5625,145 @@ function handleCallPlanSubmit(event) {
   startCall(CallType.PHONE, { plan: selectedPlan });
 }
 
+function populateChatWallpaperForm(chat) {
+  if (!chatWallpaperForm) return;
+  const override = chat ? getChatWallpaperOverride(chat.id) : null;
+  const targetValue = override ?? "default";
+  chatWallpaperOptions.forEach((input) => {
+    if (input instanceof HTMLInputElement) {
+      input.checked = input.value === targetValue;
+    }
+  });
+  if (chatWallpaperUseDefaultButton) {
+    chatWallpaperUseDefaultButton.disabled = !chat || !override;
+  }
+  if (chatWallpaperApplyButton) {
+    chatWallpaperApplyButton.disabled = !chat;
+  }
+}
+
+function openChatWallpaperModal() {
+  if (!chatWallpaperModal || !chatWallpaperForm) return;
+  const chat = getActiveChat();
+  if (!chat) {
+    showToast("Select a chat to customize the wallpaper");
+    return;
+  }
+  if (!chatWallpaperModal.hidden) return;
+
+  if (profileModal && !profileModal.hidden) {
+    closeProfile({ restoreFocus: false });
+  }
+  if (settingsModal && !settingsModal.hidden) {
+    closeSettings({ restoreFocus: false });
+  }
+
+  chatWallpaperRestoreFocusTo =
+    document.activeElement instanceof HTMLElement ? document.activeElement : chatWallpaperButton;
+
+  populateChatWallpaperForm(chat);
+
+  chatWallpaperModal.hidden = false;
+  chatWallpaperModal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("modal-open");
+
+  const selectedInput = chatWallpaperForm.querySelector('input[name="chat-wallpaper"]:checked');
+  if (selectedInput instanceof HTMLElement) {
+    selectedInput.focus();
+  }
+}
+
+function closeChatWallpaperModal({ restoreFocus = true } = {}) {
+  if (!chatWallpaperModal || chatWallpaperModal.hidden) return;
+
+  chatWallpaperModal.hidden = true;
+  chatWallpaperModal.setAttribute("aria-hidden", "true");
+
+  if (
+    (!newContactModal || newContactModal.hidden) &&
+    (!profileModal || profileModal.hidden) &&
+    (!settingsModal || settingsModal.hidden) &&
+    (!callPlanModal || callPlanModal.hidden)
+  ) {
+    document.body.classList.remove("modal-open");
+  }
+
+  const restoreTarget = chatWallpaperRestoreFocusTo;
+  chatWallpaperRestoreFocusTo = null;
+  if (restoreFocus && restoreTarget instanceof HTMLElement) {
+    restoreTarget.focus();
+  }
+}
+
+function trapChatWallpaperFocus(event) {
+  if (!chatWallpaperModal || chatWallpaperModal.hidden) return;
+  if (event.key !== "Tab") return;
+
+  const focusableSelectors =
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  const focusable = Array.from(chatWallpaperModal.querySelectorAll(focusableSelectors)).filter(
+    (element) =>
+      element instanceof HTMLElement &&
+      !element.hasAttribute("data-close-modal") &&
+      element.offsetParent !== null
+  );
+
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+
+  if (event.shiftKey) {
+    if (document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    }
+  } else if (document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function handleChatWallpaperSubmit(event) {
+  event.preventDefault();
+  if (!chatWallpaperForm) return;
+  const chat = getActiveChat();
+  if (!chat) {
+    closeChatWallpaperModal({ restoreFocus: false });
+    showToast("Select a chat to customize the wallpaper");
+    return;
+  }
+
+  const formData = new FormData(chatWallpaperForm);
+  const selection = (formData.get("chat-wallpaper") || "default").toString();
+  if (selection === "default") {
+    clearChatWallpaperOverride(chat.id);
+    showToast(`Using app wallpaper for ${chat.name}`);
+  } else {
+    setChatWallpaperOverride(chat.id, selection);
+    showToast(`Applied ${selection} wallpaper to this chat`);
+  }
+  updateWallpaperControls(activeWallpaper);
+  closeChatWallpaperModal();
+}
+
+function handleChatWallpaperUseDefault(event) {
+  event.preventDefault();
+  const chat = getActiveChat();
+  if (!chat) {
+    showToast("Select a chat to customize the wallpaper");
+    return;
+  }
+  if (!getChatWallpaperOverride(chat.id)) {
+    showToast("This chat already uses the app wallpaper");
+    closeChatWallpaperModal();
+    return;
+  }
+  clearChatWallpaperOverride(chat.id);
+  updateWallpaperControls(activeWallpaper);
+  showToast(`Using app wallpaper for ${chat.name}`);
+  closeChatWallpaperModal();
+}
+
 function startCall(callType, { plan = null } = {}) {
   const chat = getActiveChat();
   if (!chat) {
@@ -5914,10 +6301,13 @@ function renderContactSuggestions(results, query = "") {
     button.dataset.username = entry.username;
     button.setAttribute("role", "option");
 
+    const label = document.createElement("span");
+    label.className = "new-contact__suggestion-label";
     const labelFragment = createHighlightedFragment(entry.username, trimmedQuery, {
       className: "text-highlight",
     });
-    button.appendChild(labelFragment);
+    label.appendChild(labelFragment);
+    button.appendChild(label);
 
     const meta = document.createElement("span");
     meta.textContent = "Existing user";
@@ -6719,6 +7109,7 @@ let callTimerInterval = null;
 let callConnectionTimeout = null;
 let callPlanRestoreFocusTo = null;
 let callOverlayRestoreFocusTo = null;
+let chatWallpaperRestoreFocusTo = null;
 
 function buildEmojiPicker() {
   if (!emojiPicker) return;
@@ -6947,7 +7338,7 @@ function trapSettingsFocus(event) {
 
 function hydrate() {
   applyTheme(activeTheme);
-  applyWallpaper(activeWallpaper);
+  applyChatWallpaper(activeChatId);
   updateThemeControls(activeTheme);
   updateWallpaperControls(activeWallpaper);
   updateProfileUI(activeProfile);
@@ -7170,6 +7561,27 @@ function hydrate() {
     });
     settingsModal.addEventListener("keydown", trapSettingsFocus);
   }
+  if (chatWallpaperButton) {
+    chatWallpaperButton.addEventListener("click", openChatWallpaperModal);
+  }
+  if (chatWallpaperCloseButton) {
+    chatWallpaperCloseButton.addEventListener("click", () => closeChatWallpaperModal());
+  }
+  if (chatWallpaperUseDefaultButton) {
+    chatWallpaperUseDefaultButton.addEventListener("click", handleChatWallpaperUseDefault);
+  }
+  if (chatWallpaperForm) {
+    chatWallpaperForm.addEventListener("submit", handleChatWallpaperSubmit);
+  }
+  if (chatWallpaperModal) {
+    chatWallpaperModal.addEventListener("click", (event) => {
+      const target = event.target;
+      if (target instanceof HTMLElement && target.hasAttribute("data-close-modal")) {
+        closeChatWallpaperModal();
+      }
+    });
+    chatWallpaperModal.addEventListener("keydown", trapChatWallpaperFocus);
+  }
   if (startAudioCallButton) {
     startAudioCallButton.addEventListener("click", () => startCall(CallType.AUDIO));
   }
@@ -7252,12 +7664,14 @@ function hydrate() {
       chats = loadState();
       drafts = loadDrafts();
       attachmentDrafts = loadAttachmentDrafts();
+      contacts = sortContacts(loadContacts());
+      chatWallpaperOverrides = loadChatWallpaperOverrides();
       activeProfile = loadProfile();
       activeTheme = loadTheme();
       applyTheme(activeTheme);
       updateThemeControls(activeTheme);
       activeWallpaper = loadWallpaper();
-      applyWallpaper(activeWallpaper);
+      applyChatWallpaper(activeChatId);
       updateWallpaperControls(activeWallpaper);
       updateProfileUI(activeProfile);
       if (profileModal && !profileModal.hidden) {
