@@ -582,6 +582,98 @@ async function saveMessage({ chatId, senderId, content }) {
   }
 }
 
+function parseMessageContentForPreview(content) {
+  if (typeof content !== 'string') {
+    return { text: '', attachments: [] };
+  }
+
+  const trimmed = content.trim();
+  if (!trimmed) {
+    return { text: '', attachments: [] };
+  }
+
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (typeof parsed === 'string') {
+        return { text: parsed, attachments: [] };
+      }
+      const text = typeof parsed.text === 'string' ? parsed.text : '';
+      const attachments = Array.isArray(parsed.attachments) ? parsed.attachments : [];
+      return { text, attachments };
+    } catch (_error) {
+      return { text: trimmed, attachments: [] };
+    }
+  }
+
+  return { text: trimmed, attachments: [] };
+}
+
+function formatVoiceDurationPreview(seconds) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value <= 0) {
+    return '';
+  }
+  const total = Math.max(1, Math.round(value));
+  const minutes = Math.floor(total / 60);
+  const secs = total % 60;
+  const padded = secs.toString().padStart(2, '0');
+  return minutes ? `${minutes}:${padded}` : `0:${padded}`;
+}
+
+function describeAttachmentForPreview(attachment) {
+  if (!attachment || typeof attachment !== 'object') {
+    return 'Attachment';
+  }
+
+  const metadata = attachment.metadata && typeof attachment.metadata === 'object' ? attachment.metadata : null;
+  if (metadata && Number.isFinite(metadata.voiceNoteDuration)) {
+    const duration = formatVoiceDurationPreview(metadata.voiceNoteDuration);
+    return duration ? `Voice message (${duration})` : 'Voice message';
+  }
+
+  const kind = typeof attachment.kind === 'string' ? attachment.kind.toLowerCase() : '';
+  const type = typeof attachment.type === 'string' ? attachment.type.toLowerCase() : '';
+
+  if (kind === 'image' || type.startsWith('image/')) {
+    return 'Photo';
+  }
+  if (kind === 'video' || type.startsWith('video/')) {
+    return 'Video';
+  }
+  if (kind === 'audio' || type.startsWith('audio/')) {
+    return 'Audio';
+  }
+
+  return 'Document';
+}
+
+function buildAttachmentPreviewSummary(attachments = []) {
+  if (!attachments.length) {
+    return '';
+  }
+
+  const [first, ...rest] = attachments;
+  const label = describeAttachmentForPreview(first);
+  if (label.startsWith('Voice message')) {
+    return rest.length ? `${label} +${rest.length}` : label;
+  }
+  if (rest.length) {
+    return `${label} +${rest.length}`;
+  }
+  return label;
+}
+
+function buildMessagePreview(content) {
+  const { text, attachments } = parseMessageContentForPreview(content);
+  const normalizedText = text.trim();
+  if (normalizedText) {
+    return normalizedText.replace(/\s+/g, ' ').slice(0, 140);
+  }
+  const attachmentSummary = buildAttachmentPreviewSummary(attachments);
+  return attachmentSummary;
+}
+
 async function listAllMessages(limit = 200) {
   const normalizedLimit =
     Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 1000) : 200;
@@ -1108,10 +1200,7 @@ io.on('connection', (socket) => {
         }
         io.to(chatId).emit('message', payload);
 
-        const preview =
-          typeof content === 'string'
-            ? content.trim().replace(/\s+/g, ' ').slice(0, 140)
-            : '';
+        const preview = buildMessagePreview(content);
 
         recordActivity({
           type: 'message:sent',

@@ -140,6 +140,16 @@ const PROFILE_STORAGE_KEY = "whatsapp-clone-profile-v1";
 const AUTH_STORAGE_KEY = "whatsapp-clone-auth-v1";
 const CONTACTS_STORAGE_KEY = "whatsapp-clone-contacts-v1";
 const STORAGE_NAMESPACE_DEFAULT = "demo";
+
+const sessionStore = {
+  chats: [],
+  drafts: {},
+  attachmentDrafts: {},
+  contacts: [],
+  profile: null,
+};
+
+let authState = null;
 const apiBaseFromDataset =
   typeof document !== "undefined" && document.body?.dataset?.apiBase
     ? document.body.dataset.apiBase.trim()
@@ -605,6 +615,32 @@ function cloneAttachment(attachment) {
     ...normalized,
     ...(normalized.metadata ? { metadata: { ...normalized.metadata } } : {}),
   };
+}
+
+function serializeAttachmentForServer(attachment) {
+  const normalized = normalizeAttachment(attachment);
+  if (!normalized) return null;
+
+  const payload = {
+    id: normalized.id,
+    name: normalized.name,
+    type: normalized.type,
+    kind: normalized.kind,
+  };
+
+  if (Number.isFinite(normalized.size)) {
+    payload.size = Number(normalized.size);
+  }
+
+  if (normalized.dataUrl) {
+    payload.dataUrl = normalized.dataUrl;
+  }
+
+  if (normalized.metadata && typeof normalized.metadata === "object") {
+    payload.metadata = { ...normalized.metadata };
+  }
+
+  return payload;
 }
 
 function createVoiceNoteAttachment(durationSeconds = 12) {
@@ -1183,23 +1219,34 @@ function contactsMatch(contactA, contactB) {
 }
 
 function loadContacts() {
+  if (isLiveMessagingSession()) {
+    return sessionStore.contacts.map(normalizeContact).filter(Boolean);
+  }
   try {
     const namespace = getStorageNamespace();
     const store = readNamespacedStorage(CONTACTS_STORAGE_KEY);
     const raw = store[namespace];
     if (!Array.isArray(raw)) {
+      sessionStore.contacts = [];
       return [];
     }
-    return raw.map(normalizeContact).filter(Boolean);
+    const contactsFromStore = raw.map(normalizeContact).filter(Boolean);
+    sessionStore.contacts = contactsFromStore.map((contact) => ({ ...contact }));
+    return contactsFromStore;
   } catch (error) {
     console.error("Failed to load contacts", error);
+    sessionStore.contacts = [];
     return [];
   }
 }
 
 function saveContacts(state) {
-  const namespace = getStorageNamespace();
   const sanitized = (state ?? []).map(normalizeContact).filter(Boolean);
+  sessionStore.contacts = sanitized.map((contact) => ({ ...contact }));
+  if (isLiveMessagingSession()) {
+    return;
+  }
+  const namespace = getStorageNamespace();
   writeNamespacedStorage(CONTACTS_STORAGE_KEY, namespace, sanitized);
 }
 
@@ -1598,6 +1645,18 @@ function getStorageNamespace(auth = authState) {
   return STORAGE_NAMESPACE_DEFAULT;
 }
 
+function isLiveMessagingSession(auth = authState) {
+  return Boolean(auth && typeof auth.token === "string" && auth.token.trim());
+}
+
+function resetSessionStore() {
+  sessionStore.chats = [];
+  sessionStore.drafts = {};
+  sessionStore.attachmentDrafts = {};
+  sessionStore.contacts = [];
+  sessionStore.profile = null;
+}
+
 function readNamespacedStorage(key) {
   try {
     const raw = localStorage.getItem(key);
@@ -1638,59 +1697,102 @@ function deleteNamespacedStorage(key, namespace) {
 }
 
 function loadState() {
+  if (isLiveMessagingSession()) {
+    return sessionStore.chats.map(normalizeChat).filter(Boolean);
+  }
   try {
     const namespace = getStorageNamespace();
     const store = readNamespacedStorage(STORAGE_KEY);
     const raw = store[namespace];
     if (Array.isArray(raw)) {
-      return raw.map(normalizeChat).filter(Boolean);
+      const normalized = raw.map(normalizeChat).filter(Boolean);
+      sessionStore.chats = normalized.map((chat) => ({ ...chat }));
+      return normalized;
     }
     if (namespace === STORAGE_NAMESPACE_DEFAULT) {
-      return initialData.map(normalizeChat).filter(Boolean);
+      const normalized = initialData.map(normalizeChat).filter(Boolean);
+      sessionStore.chats = normalized.map((chat) => ({ ...chat }));
+      return normalized;
     }
+    sessionStore.chats = [];
     return [];
   } catch (error) {
     console.error("Failed to load chats", error);
     const namespace = getStorageNamespace();
     if (namespace === STORAGE_NAMESPACE_DEFAULT) {
-      return initialData.map(normalizeChat).filter(Boolean);
+      const normalized = initialData.map(normalizeChat).filter(Boolean);
+      sessionStore.chats = normalized.map((chat) => ({ ...chat }));
+      return normalized;
     }
+    sessionStore.chats = [];
     return [];
   }
 }
 
 function saveState(state) {
+  const normalized = (state ?? []).map(normalizeChat).filter(Boolean);
+  sessionStore.chats = normalized.map((chat) => ({ ...chat }));
+  if (isLiveMessagingSession()) {
+    return;
+  }
   const namespace = getStorageNamespace();
-  writeNamespacedStorage(STORAGE_KEY, namespace, state);
+  writeNamespacedStorage(STORAGE_KEY, namespace, normalized);
 }
 
 function loadDrafts() {
+  if (isLiveMessagingSession()) {
+    return { ...sessionStore.drafts };
+  }
   try {
     const namespace = getStorageNamespace();
     const store = readNamespacedStorage(DRAFTS_STORAGE_KEY);
     const raw = store[namespace];
-    if (typeof raw !== "object" || raw === null) return {};
-    return Object.fromEntries(
+    if (typeof raw !== "object" || raw === null) {
+      sessionStore.drafts = {};
+      return {};
+    }
+    const drafts = Object.fromEntries(
       Object.entries(raw).filter(([, value]) => typeof value === "string")
     );
+    sessionStore.drafts = { ...drafts };
+    return drafts;
   } catch (error) {
     console.error("Failed to load drafts", error);
+    sessionStore.drafts = {};
     return {};
   }
 }
 
 function saveDrafts(state) {
+  const snapshot = Object.fromEntries(
+    Object.entries(state ?? {}).filter(([, value]) => typeof value === "string")
+  );
+  sessionStore.drafts = { ...snapshot };
+  if (isLiveMessagingSession()) {
+    return;
+  }
   const namespace = getStorageNamespace();
-  writeNamespacedStorage(DRAFTS_STORAGE_KEY, namespace, state);
+  writeNamespacedStorage(DRAFTS_STORAGE_KEY, namespace, snapshot);
 }
 
 function loadAttachmentDrafts() {
+  if (isLiveMessagingSession()) {
+    return Object.fromEntries(
+      Object.entries(sessionStore.attachmentDrafts).map(([chatId, attachments]) => [
+        chatId,
+        (attachments ?? []).map(cloneAttachment).filter(Boolean),
+      ])
+    );
+  }
   try {
     const namespace = getStorageNamespace();
     const store = readNamespacedStorage(ATTACHMENT_DRAFTS_STORAGE_KEY);
     const parsed = store[namespace];
-    if (typeof parsed !== "object" || parsed === null) return {};
-    return Object.fromEntries(
+    if (typeof parsed !== "object" || parsed === null) {
+      sessionStore.attachmentDrafts = {};
+      return {};
+    }
+    const drafts = Object.fromEntries(
       Object.entries(parsed)
         .map(([chatId, attachments]) => {
           if (!Array.isArray(attachments)) return null;
@@ -1700,15 +1802,46 @@ function loadAttachmentDrafts() {
         })
         .filter(Boolean)
     );
+    sessionStore.attachmentDrafts = Object.fromEntries(
+      Object.entries(drafts).map(([chatId, attachments]) => [
+        chatId,
+        attachments.map(cloneAttachment).filter(Boolean),
+      ])
+    );
+    return drafts;
   } catch (error) {
     console.error("Failed to load attachment drafts", error);
+    sessionStore.attachmentDrafts = {};
     return {};
   }
 }
 
 function saveAttachmentDrafts(state) {
+  const sanitized = Object.fromEntries(
+    Object.entries(state ?? {})
+      .map(([chatId, attachments]) => {
+        if (!Array.isArray(attachments)) {
+          return null;
+        }
+        const normalized = attachments.map(cloneAttachment).filter(Boolean);
+        if (!normalized.length) {
+          return null;
+        }
+        return [chatId, normalized];
+      })
+      .filter(Boolean)
+  );
+  sessionStore.attachmentDrafts = Object.fromEntries(
+    Object.entries(sanitized).map(([chatId, attachments]) => [
+      chatId,
+      attachments.map(cloneAttachment).filter(Boolean),
+    ])
+  );
+  if (isLiveMessagingSession()) {
+    return;
+  }
   const namespace = getStorageNamespace();
-  writeNamespacedStorage(ATTACHMENT_DRAFTS_STORAGE_KEY, namespace, state);
+  writeNamespacedStorage(ATTACHMENT_DRAFTS_STORAGE_KEY, namespace, sanitized);
 }
 
 function normalizeProfile(value) {
@@ -1728,21 +1861,35 @@ function normalizeProfile(value) {
 }
 
 function loadProfile() {
+  if (isLiveMessagingSession()) {
+    return sessionStore.profile ? { ...sessionStore.profile } : { ...defaultProfile };
+  }
   try {
     const namespace = getStorageNamespace();
     const store = readNamespacedStorage(PROFILE_STORAGE_KEY);
     const raw = store[namespace];
-    if (!raw) return { ...defaultProfile };
-    return normalizeProfile(raw);
+    if (!raw) {
+      sessionStore.profile = null;
+      return { ...defaultProfile };
+    }
+    const profile = normalizeProfile(raw);
+    sessionStore.profile = { ...profile };
+    return profile;
   } catch (error) {
     console.error("Failed to load profile", error);
+    sessionStore.profile = null;
     return { ...defaultProfile };
   }
 }
 
 function saveProfile(profile) {
+  const normalized = normalizeProfile(profile);
+  sessionStore.profile = { ...normalized };
+  if (isLiveMessagingSession()) {
+    return;
+  }
   const namespace = getStorageNamespace();
-  writeNamespacedStorage(PROFILE_STORAGE_KEY, namespace, profile);
+  writeNamespacedStorage(PROFILE_STORAGE_KEY, namespace, normalized);
 }
 
 function normalizeAuthState(value) {
@@ -2351,34 +2498,71 @@ function joinChatRealtime(chatId) {
   syncRealtimeConnection();
 }
 
-function buildServerMessageContent(text, attachments = []) {
+function serializeMessageContentForServer(text, attachments = []) {
   const normalizedText = typeof text === "string" ? text.trim() : "";
-  if (normalizedText) {
-    return normalizedText;
-  }
-
   const normalizedAttachments = Array.isArray(attachments)
-    ? attachments.map((attachment) => normalizeAttachment(attachment)).filter(Boolean)
+    ? attachments.map((attachment) => serializeAttachmentForServer(attachment)).filter(Boolean)
     : [];
 
-  if (!normalizedAttachments.length) {
+  if (!normalizedText && !normalizedAttachments.length) {
     return "";
   }
 
-  const [first, ...rest] = normalizedAttachments;
-  if (isVoiceNote(first)) {
-    const duration = formatVoiceDuration(getVoiceNoteDurationSeconds(first));
-    const suffix = rest.length ? ` (+${rest.length})` : "";
-    return `[Voice message] ${duration}${suffix}`;
+  if (!normalizedAttachments.length) {
+    return normalizedText;
   }
 
-  const label = getAttachmentLabel(first);
-  const name = typeof first.name === "string" ? first.name.trim() : "";
-  if (!rest.length) {
-    return name ? `[${label}] ${name}` : `[${label}]`;
+  try {
+    return JSON.stringify({
+      text: normalizedText,
+      attachments: normalizedAttachments,
+    });
+  } catch (error) {
+    console.error("Failed to serialize message content", error);
+    return normalizedText || "";
+  }
+}
+
+function normalizeServerMessageContent(payload) {
+  if (!payload || typeof payload !== "object") {
+    return { text: "", attachments: [] };
   }
 
-  return `[Attachments] ${normalizedAttachments.length} items`;
+  const text = typeof payload.text === "string" ? payload.text : "";
+  const attachments = Array.isArray(payload.attachments)
+    ? payload.attachments.map(normalizeAttachment).filter(Boolean)
+    : [];
+
+  return { text, attachments };
+}
+
+function parseServerMessageContent(rawContent) {
+  if (typeof rawContent === "string") {
+    const trimmed = rawContent.trim();
+    if (!trimmed) {
+      return { text: "", attachments: [] };
+    }
+
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (typeof parsed === "string") {
+          return { text: parsed, attachments: [] };
+        }
+        return normalizeServerMessageContent(parsed);
+      } catch (_error) {
+        return { text: trimmed, attachments: [] };
+      }
+    }
+
+    return { text: trimmed, attachments: [] };
+  }
+
+  if (rawContent && typeof rawContent === "object") {
+    return normalizeServerMessageContent(rawContent);
+  }
+
+  return { text: "", attachments: [] };
 }
 
 function buildLocalMessageFromServer(chatId, payload) {
@@ -2386,7 +2570,7 @@ function buildLocalMessageFromServer(chatId, payload) {
     return null;
   }
 
-  const text = typeof payload.content === "string" ? payload.content : "";
+  const { text, attachments } = parseServerMessageContent(payload.content);
   const rawTimestamp = typeof payload.timestamp === "string" ? payload.timestamp : "";
   const parsed = new Date(rawTimestamp);
   const timestamp = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
@@ -2404,7 +2588,7 @@ function buildLocalMessageFromServer(chatId, payload) {
     direction,
     sentAt: timestamp.toISOString(),
     timestamp: formatTimeFromDate(timestamp),
-    attachments: [],
+    attachments,
     serverId: payload.id !== undefined && payload.id !== null ? String(payload.id) : null,
     clientId: typeof payload.client_id === "string" && payload.client_id ? payload.client_id : null,
     senderId,
@@ -2578,9 +2762,15 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false, 
       if (existing) {
         const preservedId = existing.id;
         const preservedAttachments = Array.isArray(existing.attachments) ? existing.attachments : [];
+        const nextAttachments =
+          preservedAttachments.length > 0
+            ? preservedAttachments
+            : Array.isArray(normalizedMessage.attachments)
+            ? normalizedMessage.attachments
+            : [];
         Object.assign(existing, normalizedMessage, {
           id: preservedId,
-          attachments: preservedAttachments,
+          attachments: nextAttachments,
         });
         serverMessageIds.add(normalizedMessage.serverId);
         if (normalizedMessage.clientId) {
@@ -2597,9 +2787,15 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false, 
         const existing = chat.messages.find((message) => message.id === pending.localMessageId);
         if (existing) {
           const preservedAttachments = Array.isArray(existing.attachments) ? existing.attachments : [];
+          const nextAttachments =
+            preservedAttachments.length > 0
+              ? preservedAttachments
+              : Array.isArray(normalizedMessage.attachments)
+              ? normalizedMessage.attachments
+              : [];
           Object.assign(existing, normalizedMessage, {
             id: existing.id,
-            attachments: preservedAttachments,
+            attachments: nextAttachments,
           });
           if (normalizedMessage.serverId && serverMessageIds) {
             existing.serverId = normalizedMessage.serverId;
@@ -2712,7 +2908,7 @@ function sendOutgoingMessageToServer(chat, message, text, attachments = []) {
     return;
   }
 
-  const content = buildServerMessageContent(text, attachments);
+  const content = serializeMessageContentForServer(text, attachments);
   if (!content) {
     return;
   }
@@ -2803,6 +2999,7 @@ function setAuthState(nextState) {
   const normalized = normalizeAuthState(nextState);
   if (!normalized) {
     authState = null;
+    resetSessionStore();
     clearAuthStateStorage();
     setActiveAuthView(AuthView.LOGIN);
     updateAuthUI();
@@ -2812,6 +3009,7 @@ function setAuthState(nextState) {
 
   authState = normalized;
   saveAuthState(authState);
+  resetSessionStore();
   applyAuthenticatedUserToProfile(authState);
   reloadStateForActiveUser({ preserveChat: false });
   updateAuthUI();
@@ -2963,6 +3161,7 @@ function reloadStateForActiveUser({ preserveChat = false } = {}) {
 
 function resetAppDataToDefaults({ auth, removeStoredData = true } = {}) {
   clearPendingAttachments();
+  resetSessionStore();
   const namespace = getStorageNamespace(auth ?? authState);
   if (removeStoredData) {
     deleteNamespacedStorage(STORAGE_KEY, namespace);
@@ -3307,7 +3506,7 @@ function resumePendingStatuses() {
   }
 }
 
-let authState = loadAuthState();
+authState = loadAuthState();
 let chats = loadState();
 let drafts = loadDrafts();
 let attachmentDrafts = loadAttachmentDrafts();
