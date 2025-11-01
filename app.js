@@ -33,7 +33,6 @@ const chatSearchInput = document.getElementById("chat-search");
 const newChatButton = document.getElementById("new-chat-button");
 const toggleStarButton = document.getElementById("toggle-star");
 const toggleArchiveButton = document.getElementById("toggle-archive");
-const deleteChatButton = document.getElementById("delete-chat");
 const chatWallpaperButton = document.getElementById("customize-chat-wallpaper");
 const filterChips = Array.from(document.querySelectorAll(".filter-chip"));
 const filterCountElements = {
@@ -5463,19 +5462,6 @@ function renderChatView(chat) {
     chatWallpaperButton.setAttribute("title", label);
   }
 
-  if (deleteChatButton) {
-    const hasChat = Boolean(chat);
-    deleteChatButton.disabled = !hasChat;
-    deleteChatButton.setAttribute("aria-disabled", hasChat ? "false" : "true");
-    const label = hasChat
-      ? chat.type === ChatType.GROUP
-        ? `Delete group ${chat.name}`
-        : `Delete conversation with ${chat.name}`
-      : "Delete conversation";
-    deleteChatButton.setAttribute("aria-label", label);
-    deleteChatButton.setAttribute("title", label);
-  }
-
   if (!chat) {
     if (exportChatButton) {
       exportChatButton.disabled = true;
@@ -7806,77 +7792,6 @@ function toggleArchive() {
   showToast(willArchive ? "Conversation archived" : "Conversation restored");
 }
 
-function deleteChatById(chatId) {
-  const normalizedId = normalizeChatIdentifier(chatId);
-  if (!normalizedId) {
-    return null;
-  }
-
-  const index = chats.findIndex((candidate) => candidate.id === normalizedId);
-  if (index === -1) {
-    return null;
-  }
-
-  const [removedChat] = chats.splice(index, 1);
-
-  if (Object.prototype.hasOwnProperty.call(drafts, normalizedId)) {
-    delete drafts[normalizedId];
-    saveDrafts(drafts);
-  }
-
-  if (Object.prototype.hasOwnProperty.call(attachmentDrafts, normalizedId)) {
-    delete attachmentDrafts[normalizedId];
-    saveAttachmentDrafts(attachmentDrafts);
-  }
-
-  clearChatWallpaperOverride(normalizedId, { sync: true, silent: true });
-  saveState(chats);
-  syncContactsFromChats();
-
-  const wasActive = activeChatId === normalizedId;
-  const nextChat = chats[index] ?? chats[index - 1] ?? null;
-
-  if (wasActive) {
-    pendingAttachments = [];
-    activeChatId = null;
-    if (nextChat) {
-      openChat(nextChat.id);
-    } else {
-      renderChats(chatSearchInput.value);
-      renderChatView(null);
-      applyChatWallpaper(null);
-    }
-  } else {
-    renderChats(chatSearchInput.value);
-  }
-
-  return removedChat;
-}
-
-function handleDeleteActiveChat() {
-  const chat = getActiveChat();
-  if (!chat) {
-    showToast("Select a chat to delete");
-    return;
-  }
-
-  const label = chat.type === ChatType.GROUP ? "group chat" : "conversation";
-  const confirmed = window.confirm(
-    `Delete the ${label} "${chat.name}"? This will remove the conversation history from this device.`
-  );
-  if (!confirmed) {
-    return;
-  }
-
-  const removedChat = deleteChatById(chat.id);
-  if (removedChat) {
-    const toastLabel = removedChat.type === ChatType.GROUP ? "group" : "conversation";
-    showToast(`Deleted ${toastLabel} ${removedChat.name}`);
-  } else {
-    showToast("Couldn't delete conversation");
-  }
-}
-
 function autoResizeTextarea() {
   messageInput.style.height = "auto";
   messageInput.style.height = `${messageInput.scrollHeight}px`;
@@ -8488,11 +8403,6 @@ function hydrate() {
   }
   toggleStarButton.addEventListener("click", toggleStar);
   toggleArchiveButton.addEventListener("click", toggleArchive);
-  if (deleteChatButton) {
-    deleteChatButton.addEventListener("click", handleDeleteActiveChat);
-    deleteChatButton.disabled = true;
-    deleteChatButton.setAttribute("aria-disabled", "true");
-  }
   if (openMessageSearchButton) {
     openMessageSearchButton.addEventListener("click", () => {
       if (isMessageSearchOpen) {
