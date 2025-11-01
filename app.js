@@ -30,9 +30,7 @@ if (messageSearchContainer) {
   messageSearchContainer.setAttribute("aria-hidden", "true");
 }
 const chatSearchInput = document.getElementById("chat-search");
-const addContactButton = document.getElementById("add-contact-button");
-const startNewChatButton = document.getElementById("start-new-chat-button");
-const startNewGroupButton = document.getElementById("start-new-group-button");
+const newChatButton = document.getElementById("new-chat-button");
 const toggleStarButton = document.getElementById("toggle-star");
 const toggleArchiveButton = document.getElementById("toggle-archive");
 const deleteChatButton = document.getElementById("delete-chat");
@@ -71,7 +69,6 @@ const newContactModal = document.getElementById("new-contact-modal");
 const newContactForm = document.getElementById("new-contact-form");
 const newContactCloseButton = document.getElementById("new-contact-close");
 const newContactCancelButton = document.getElementById("new-contact-cancel");
-const newContactTitleElement = document.getElementById("new-contact-title");
 const newContactPreviewElement = document.getElementById("new-contact-preview");
 const newContactLookupElement = document.getElementById("new-contact-lookup");
 const newContactSuggestionsElement = document.getElementById("new-contact-suggestions");
@@ -363,27 +360,6 @@ const ContactMethodLabels = {
   [ContactMethod.EMAIL]: "email address",
   [ContactMethod.CONTACT_CARD]: "contact share",
   [ContactMethod.GROUP]: "group chat",
-};
-
-const NewContactModalContext = {
-  LIST: "list",
-  CONTACT: "contact",
-  GROUP: "group",
-};
-
-const NewContactModalLabels = {
-  [NewContactModalContext.LIST]: {
-    title: "Start new chat",
-    closeLabel: "Close start new chat",
-  },
-  [NewContactModalContext.CONTACT]: {
-    title: "Add contact",
-    closeLabel: "Close add contact",
-  },
-  [NewContactModalContext.GROUP]: {
-    title: "Start new group",
-    closeLabel: "Close start new group",
-  },
 };
 
 const ChatType = {
@@ -4758,53 +4734,6 @@ let contactLookupState = {
 let chatMessagesShouldStickToBottom = true;
 let hasShownStorageQuotaWarning = false;
 
-function getNewContactFallbackTrigger() {
-  if (startNewChatButton instanceof HTMLElement) {
-    return startNewChatButton;
-  }
-  if (addContactButton instanceof HTMLElement) {
-    return addContactButton;
-  }
-  if (startNewGroupButton instanceof HTMLElement) {
-    return startNewGroupButton;
-  }
-  return null;
-}
-
-function setNewContactModalContext(context, overrides = {}) {
-  if (!newContactModal) return;
-
-  const allowed = Object.values(NewContactModalContext);
-  const normalized = allowed.includes(context) ? context : NewContactModalContext.LIST;
-  newContactModal.dataset.context = normalized;
-
-  const defaults = NewContactModalLabels[normalized] ?? NewContactModalLabels[NewContactModalContext.LIST];
-  const title = overrides.title ?? defaults.title;
-  const closeLabel = overrides.closeLabel ?? defaults.closeLabel;
-
-  if (newContactTitleElement && typeof title === "string") {
-    newContactTitleElement.textContent = title;
-  }
-
-  if (newContactCloseButton) {
-    if (typeof closeLabel === "string" && closeLabel.trim()) {
-      newContactCloseButton.setAttribute("aria-label", closeLabel);
-      newContactCloseButton.title = closeLabel;
-    } else {
-      newContactCloseButton.removeAttribute("aria-label");
-      newContactCloseButton.removeAttribute("title");
-    }
-  }
-}
-
-function updateNewContactRestoreTarget(trigger) {
-  if (trigger instanceof HTMLElement) {
-    newContactRestoreFocusTo = trigger;
-  } else if (!newContactRestoreFocusTo) {
-    newContactRestoreFocusTo = getNewContactFallbackTrigger();
-  }
-}
-
 function getActiveChat() {
   return chats.find((chat) => chat.id === activeChatId) ?? null;
 }
@@ -7618,10 +7547,9 @@ function handleNewChatContactClick(event) {
 }
 
 function handleStartNewContact() {
-  setNewContactModalContext(NewContactModalContext.CONTACT);
-  resetNewContactForm();
-  showNewChatView("form", { focus: false });
+  showNewChatView("form");
   setActiveContactMethod(ContactMethod.NICKNAME, { focus: true });
+  refreshContactLookupForMethod();
 }
 
 function openChatForContact(contact, { showToastMessage = true } = {}) {
@@ -7650,19 +7578,9 @@ function openChatForContact(contact, { showToastMessage = true } = {}) {
   return { chat, created: true };
 }
 
-function openNewContactModal(options = {}) {
+function openNewContactModal() {
   if (!newContactModal || !newContactForm) return;
   if (!newContactModal.hidden) return;
-
-  const {
-    view = "list",
-    method = ContactMethod.NICKNAME,
-    focus = true,
-    trigger = null,
-    title,
-    closeLabel,
-    context: providedContext,
-  } = options;
 
   if (profileModal && !profileModal.hidden) {
     closeProfile({ restoreFocus: false });
@@ -7671,42 +7589,21 @@ function openNewContactModal(options = {}) {
     closeSettings({ restoreFocus: false });
   }
 
-  const mode = view === "form" ? "form" : "list";
-  const context = providedContext
-    ? providedContext
-    : mode === "form"
-    ? method === ContactMethod.GROUP
-      ? NewContactModalContext.GROUP
-      : NewContactModalContext.CONTACT
-    : NewContactModalContext.LIST;
-
-  const triggerElement =
-    trigger instanceof HTMLElement
-      ? trigger
-      : document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null;
-  newContactRestoreFocusTo = triggerElement ?? getNewContactFallbackTrigger();
+  newContactRestoreFocusTo =
+    document.activeElement instanceof HTMLElement ? document.activeElement : newChatButton;
 
   resetNewContactForm();
-  renderNewChatContacts();
-
-  if (mode === "list" && newChatSearchInput) {
+  showNewChatView("list", { focus: false });
+  if (newChatSearchInput) {
     newChatSearchInput.value = "";
   }
-
-  if (mode === "form") {
-    setActiveContactMethod(method, { focus: false });
-  }
-
-  setNewContactModalContext(context, { title, closeLabel });
-  showNewChatView(mode, { focus: false });
+  renderNewChatContacts();
 
   newContactModal.hidden = false;
   document.body.classList.add("modal-open");
 
-  if (focus) {
-    showNewChatView(mode, { focus: true });
+  if (newChatSearchInput instanceof HTMLElement) {
+    newChatSearchInput.focus();
   }
 }
 
@@ -7716,7 +7613,6 @@ function closeNewContactModal({ restoreFocus = true } = {}) {
 
   newContactModal.hidden = true;
   showNewChatView("list", { focus: false });
-  setNewContactModalContext(NewContactModalContext.LIST);
   resetContactLookup();
   clearContactLookupTimer();
   if (
@@ -7734,11 +7630,8 @@ function closeNewContactModal({ restoreFocus = true } = {}) {
   if (!restoreFocus) return;
   if (restoreTarget instanceof HTMLElement) {
     restoreTarget.focus();
-  } else {
-    const fallback = getNewContactFallbackTrigger();
-    if (fallback instanceof HTMLElement) {
-      fallback.focus();
-    }
+  } else if (newChatButton) {
+    newChatButton.focus();
   }
 }
 
@@ -7813,102 +7706,18 @@ function handleNewContactSubmit(event) {
   }
 }
 
-function fallbackStartNewChat() {
+function handleNewChat() {
+  if (newContactModal && newContactForm) {
+    openNewContactModal();
+    return;
+  }
+
   const name = prompt("Who would you like to message?");
   if (typeof name !== "string") return;
   const trimmed = name.trim();
   if (!trimmed) return;
   const chat = createChat(trimmed);
   showToast(`Started a chat with ${chat.name}`);
-}
-
-function fallbackStartNewGroup() {
-  const name = prompt("What should we call this group?");
-  if (typeof name !== "string") return;
-  const trimmed = name.trim();
-  if (!trimmed) return;
-  const chat = createChat(trimmed, { type: ChatType.GROUP });
-  showToast(`Created group ${chat.name}`);
-}
-
-function handleOpenNewChatList(event) {
-  const trigger = event?.currentTarget instanceof HTMLElement ? event.currentTarget : null;
-
-  if (newContactModal && newContactForm) {
-    updateNewContactRestoreTarget(trigger);
-
-    if (newContactModal.hidden) {
-      openNewContactModal({
-        view: "list",
-        trigger,
-        context: NewContactModalContext.LIST,
-      });
-    } else {
-      setNewContactModalContext(NewContactModalContext.LIST);
-      if (newChatSearchInput) {
-        newChatSearchInput.value = "";
-      }
-      renderNewChatContacts();
-      showNewChatView("list");
-    }
-    return;
-  }
-
-  fallbackStartNewChat();
-}
-
-function handleAddContactButtonClick(event) {
-  const trigger = event?.currentTarget instanceof HTMLElement ? event.currentTarget : null;
-
-  if (newContactModal && newContactForm) {
-    updateNewContactRestoreTarget(trigger);
-
-    if (newContactModal.hidden) {
-      openNewContactModal({
-        view: "form",
-        method: ContactMethod.NICKNAME,
-        trigger,
-        context: NewContactModalContext.CONTACT,
-      });
-    } else {
-      setNewContactModalContext(NewContactModalContext.CONTACT);
-      if (newContactModal.dataset.context !== NewContactModalContext.CONTACT) {
-        resetNewContactForm();
-      }
-      showNewChatView("form", { focus: false });
-      setActiveContactMethod(ContactMethod.NICKNAME, { focus: true });
-    }
-    return;
-  }
-
-  fallbackStartNewChat();
-}
-
-function handleStartNewGroupButtonClick(event) {
-  const trigger = event?.currentTarget instanceof HTMLElement ? event.currentTarget : null;
-
-  if (newContactModal && newContactForm) {
-    updateNewContactRestoreTarget(trigger);
-
-    if (newContactModal.hidden) {
-      openNewContactModal({
-        view: "form",
-        method: ContactMethod.GROUP,
-        trigger,
-        context: NewContactModalContext.GROUP,
-      });
-    } else {
-      setNewContactModalContext(NewContactModalContext.GROUP);
-      if (newContactModal.dataset.context !== NewContactModalContext.GROUP) {
-        resetNewContactForm();
-      }
-      showNewChatView("form", { focus: false });
-      setActiveContactMethod(ContactMethod.GROUP, { focus: true });
-    }
-    return;
-  }
-
-  fallbackStartNewGroup();
 }
 
 function handleSearch(event) {
@@ -8628,15 +8437,7 @@ function hydrate() {
   });
 
   chatSearchInput.addEventListener("input", handleSearch);
-  if (startNewChatButton) {
-    startNewChatButton.addEventListener("click", handleOpenNewChatList);
-  }
-  if (addContactButton) {
-    addContactButton.addEventListener("click", handleAddContactButtonClick);
-  }
-  if (startNewGroupButton) {
-    startNewGroupButton.addEventListener("click", handleStartNewGroupButtonClick);
-  }
+  newChatButton.addEventListener("click", handleNewChat);
   sendButton.addEventListener("click", handleSend);
   messageInput.addEventListener("input", handleMessageInput);
   messageInput.addEventListener("focus", () => closeEmojiPicker());
@@ -8748,7 +8549,6 @@ function hydrate() {
   });
   if (newContactCancelButton) {
     newContactCancelButton.addEventListener("click", () => {
-      setNewContactModalContext(NewContactModalContext.LIST);
       showNewChatView("list");
       if (newChatSearchInput instanceof HTMLElement) {
         newChatSearchInput.focus();
@@ -8760,7 +8560,6 @@ function hydrate() {
   }
   if (newContactBackButton) {
     newContactBackButton.addEventListener("click", () => {
-      setNewContactModalContext(NewContactModalContext.LIST);
       showNewChatView("list");
       if (newChatSearchInput instanceof HTMLElement) {
         newChatSearchInput.focus();
@@ -8784,9 +8583,6 @@ function hydrate() {
   }
   if (newChatContactListElement) {
     newChatContactListElement.addEventListener("click", handleNewChatContactClick);
-  }
-  if (newContactModal) {
-    setNewContactModalContext(NewContactModalContext.LIST);
   }
   setActiveContactMethod(getActiveNewContactMethod());
 
