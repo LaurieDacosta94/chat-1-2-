@@ -343,61 +343,63 @@
           hidden
           aria-live="polite"
         ></div>
-        <button
-          class="icon-button"
-          id="emoji-button"
-          aria-label="Insert emoji"
-          aria-haspopup="true"
-          aria-expanded="false"
-          aria-controls="emoji-picker"
-        >
-          😊
-        </button>
-        <div class="emoji-picker" id="emoji-picker" role="menu" hidden></div>
-        <button
-          class="icon-button"
-          id="attachment-button"
-          aria-label="Add attachment"
-          title="Add attachment"
-        >
-          📎
-        </button>
-        <div class="composer__quick-actions" role="group" aria-label="Quick media actions">
+        <div class="chat__composer-toolbar" role="group" aria-label="Composer actions">
           <button
             class="icon-button"
-            id="quick-photo"
-            type="button"
-            aria-label="Send photo"
-            title="Send photo"
+            id="emoji-button"
+            aria-label="Insert emoji"
+            aria-haspopup="true"
+            aria-expanded="false"
+            aria-controls="emoji-picker"
           >
-            📷
+            😊
           </button>
+          <div class="emoji-picker" id="emoji-picker" role="menu" hidden></div>
           <button
             class="icon-button"
-            id="quick-video"
-            type="button"
-            aria-label="Send video"
-            title="Send video"
+            id="attachment-button"
+            aria-label="Add attachment"
+            title="Add attachment"
           >
-            🎬
+            📎
           </button>
-          <button
-            class="icon-button"
-            id="quick-voice"
-            type="button"
-            aria-label="Record voice message"
-            title="Record voice message"
-          >
-            🎙️
-          </button>
+          <div class="composer__quick-actions" role="group" aria-label="Quick media actions">
+            <button
+              class="icon-button"
+              id="quick-photo"
+              type="button"
+              aria-label="Send photo"
+              title="Send photo"
+            >
+              📷
+            </button>
+            <button
+              class="icon-button"
+              id="quick-video"
+              type="button"
+              aria-label="Send video"
+              title="Send video"
+            >
+              🎬
+            </button>
+            <button
+              class="icon-button"
+              id="quick-voice"
+              type="button"
+              aria-label="Record voice message"
+              title="Record voice message"
+            >
+              🎙️
+            </button>
+          </div>
+          <input
+            type="file"
+            id="attachment-input"
+            accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.rtf,.csv,.zip,.rar,.7z"
+            multiple
+            hidden
+          />
         </div>
-        <input
-          type="file"
-          id="attachment-input"
-          accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.rtf,.csv,.zip,.rar,.7z"
-          multiple
-          hidden
-        />
         <div class="chat__voice-recorder" id="voice-recorder" hidden aria-live="assertive">
           <span class="chat__voice-recorder-indicator" aria-hidden="true"></span>
           <span class="chat__voice-recorder-status" id="voice-recorder-status">Recording voice message…</span>
@@ -423,8 +425,17 @@
             </button>
           </div>
         </div>
-        <textarea id="message-input" placeholder="Type a message" rows="1" aria-label="Message input"></textarea>
-        <button class="icon-button icon-button--send" id="send-button" aria-label="Send message">➤</button>
+        <div class="chat__composer-input">
+          <textarea
+            id="message-input"
+            placeholder="Type a message"
+            rows="1"
+            aria-label="Message input"
+          ></textarea>
+          <button class="icon-button icon-button--send" id="send-button" aria-label="Send message">
+            ➤
+          </button>
+        </div>
       </footer>
     </main>
   </div>

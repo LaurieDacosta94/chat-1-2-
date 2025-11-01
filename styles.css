@@ -540,6 +540,10 @@ body.auth-locked .app {
   background-color: rgba(0, 0, 0, 0.12);
 }
 
+.chat__message-search[hidden] {
+  display: none !important;
+}
+
 :root[data-theme="light"] .chat__message-search {
   background-color: rgba(255, 255, 255, 0.65);
 }
@@ -859,6 +863,10 @@ body.auth-locked .app {
   box-shadow: 0 0 0 2px rgba(37, 211, 102, 0.6);
 }
 
+.chat__messages .message[hidden] {
+  display: none !important;
+}
+
 .message__time {
   font-variant-numeric: tabular-nums;
 }
@@ -874,17 +882,44 @@ body.auth-locked .app {
 
 .chat__composer {
   position: relative;
-  display: grid;
-  grid-template-columns: auto auto auto 1fr auto;
-  gap: 0.65rem;
-  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
   padding: 0.75rem 1.25rem;
   background-color: var(--composer-background);
   border-top: 1px solid var(--border);
 }
 
+.chat__composer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  row-gap: 0.6rem;
+  width: 100%;
+}
+
+.chat__composer-toolbar .composer__quick-actions {
+  margin-left: auto;
+}
+
+.chat__composer-input {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.chat__composer-input textarea {
+  flex: 1 1 auto;
+}
+
+.chat__composer-input .icon-button {
+  flex: 0 0 auto;
+}
+
 .composer-attachments {
-  grid-column: 1 / -1;
+  width: 100%;
   display: grid;
   gap: 0.5rem;
   grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
@@ -1034,7 +1069,7 @@ body.auth-locked .app {
 }
 
 .chat__voice-recorder {
-  grid-column: 1 / -1;
+  width: 100%;
   display: none;
   align-items: center;
   gap: 0.75rem;
