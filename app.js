@@ -140,6 +140,16 @@ const PROFILE_STORAGE_KEY = "whatsapp-clone-profile-v1";
 const AUTH_STORAGE_KEY = "whatsapp-clone-auth-v1";
 const CONTACTS_STORAGE_KEY = "whatsapp-clone-contacts-v1";
 const STORAGE_NAMESPACE_DEFAULT = "demo";
+
+const sessionStore = {
+  chats: [],
+  drafts: {},
+  attachmentDrafts: {},
+  contacts: [],
+  profile: null,
+};
+
+let authState = null;
 const apiBaseFromDataset =
   typeof document !== "undefined" && document.body?.dataset?.apiBase
     ? document.body.dataset.apiBase.trim()
@@ -258,6 +268,12 @@ const MessageStatus = {
   SENT: "sent",
   DELIVERED: "delivered",
   READ: "read",
+};
+
+const ToastIntent = {
+  INFO: "info",
+  SUCCESS: "success",
+  ERROR: "error",
 };
 
 const realtimeState = {
@@ -403,7 +419,6 @@ const Filter = {
   ARCHIVED: "archived",
 };
 
-const messageStatusTimers = new Map();
 const EMOJI_CHARACTERS = [
   "😀",
   "😁",
@@ -600,6 +615,32 @@ function cloneAttachment(attachment) {
     ...normalized,
     ...(normalized.metadata ? { metadata: { ...normalized.metadata } } : {}),
   };
+}
+
+function serializeAttachmentForServer(attachment) {
+  const normalized = normalizeAttachment(attachment);
+  if (!normalized) return null;
+
+  const payload = {
+    id: normalized.id,
+    name: normalized.name,
+    type: normalized.type,
+    kind: normalized.kind,
+  };
+
+  if (Number.isFinite(normalized.size)) {
+    payload.size = Number(normalized.size);
+  }
+
+  if (normalized.dataUrl) {
+    payload.dataUrl = normalized.dataUrl;
+  }
+
+  if (normalized.metadata && typeof normalized.metadata === "object") {
+    payload.metadata = { ...normalized.metadata };
+  }
+
+  return payload;
 }
 
 function createVoiceNoteAttachment(durationSeconds = 12) {
@@ -1178,23 +1219,34 @@ function contactsMatch(contactA, contactB) {
 }
 
 function loadContacts() {
+  if (isLiveMessagingSession()) {
+    return sessionStore.contacts.map(normalizeContact).filter(Boolean);
+  }
   try {
     const namespace = getStorageNamespace();
     const store = readNamespacedStorage(CONTACTS_STORAGE_KEY);
     const raw = store[namespace];
     if (!Array.isArray(raw)) {
+      sessionStore.contacts = [];
       return [];
     }
-    return raw.map(normalizeContact).filter(Boolean);
+    const contactsFromStore = raw.map(normalizeContact).filter(Boolean);
+    sessionStore.contacts = contactsFromStore.map((contact) => ({ ...contact }));
+    return contactsFromStore;
   } catch (error) {
     console.error("Failed to load contacts", error);
+    sessionStore.contacts = [];
     return [];
   }
 }
 
 function saveContacts(state) {
-  const namespace = getStorageNamespace();
   const sanitized = (state ?? []).map(normalizeContact).filter(Boolean);
+  sessionStore.contacts = sanitized.map((contact) => ({ ...contact }));
+  if (isLiveMessagingSession()) {
+    return;
+  }
+  const namespace = getStorageNamespace();
   writeNamespacedStorage(CONTACTS_STORAGE_KEY, namespace, sanitized);
 }
 
@@ -1305,7 +1357,7 @@ function normalizeMessage(message) {
 
   if (normalized.direction === "outgoing") {
     if (!Object.values(MessageStatus).includes(normalized.status)) {
-      normalized.status = MessageStatus.READ;
+      normalized.status = MessageStatus.SENT;
     }
   } else if (normalized.status) {
     delete normalized.status;
@@ -1349,6 +1401,11 @@ function normalizeChat(chat) {
     typeof chat.name === "string" && chat.name.trim()
       ? chat.name.trim()
       : normalizedContact?.displayName ?? "New chat";
+
+  const unreadCount =
+    Number.isFinite(chat.unreadCount) && chat.unreadCount > 0
+      ? Math.min(Math.floor(chat.unreadCount), 999)
+      : 0;
 
   const capabilities = {
     audio:
@@ -1394,6 +1451,7 @@ function normalizeChat(chat) {
     ...(normalizedContact && normalizedType !== ChatType.GROUP
       ? { contact: normalizedContact }
       : {}),
+    unreadCount,
   };
 }
 
@@ -1587,6 +1645,18 @@ function getStorageNamespace(auth = authState) {
   return STORAGE_NAMESPACE_DEFAULT;
 }
 
+function isLiveMessagingSession(auth = authState) {
+  return Boolean(auth && typeof auth.token === "string" && auth.token.trim());
+}
+
+function resetSessionStore() {
+  sessionStore.chats = [];
+  sessionStore.drafts = {};
+  sessionStore.attachmentDrafts = {};
+  sessionStore.contacts = [];
+  sessionStore.profile = null;
+}
+
 function readNamespacedStorage(key) {
   try {
     const raw = localStorage.getItem(key);
@@ -1627,59 +1697,102 @@ function deleteNamespacedStorage(key, namespace) {
 }
 
 function loadState() {
+  if (isLiveMessagingSession()) {
+    return sessionStore.chats.map(normalizeChat).filter(Boolean);
+  }
   try {
     const namespace = getStorageNamespace();
     const store = readNamespacedStorage(STORAGE_KEY);
     const raw = store[namespace];
     if (Array.isArray(raw)) {
-      return raw.map(normalizeChat).filter(Boolean);
+      const normalized = raw.map(normalizeChat).filter(Boolean);
+      sessionStore.chats = normalized.map((chat) => ({ ...chat }));
+      return normalized;
     }
     if (namespace === STORAGE_NAMESPACE_DEFAULT) {
-      return initialData.map(normalizeChat).filter(Boolean);
+      const normalized = initialData.map(normalizeChat).filter(Boolean);
+      sessionStore.chats = normalized.map((chat) => ({ ...chat }));
+      return normalized;
     }
+    sessionStore.chats = [];
     return [];
   } catch (error) {
     console.error("Failed to load chats", error);
     const namespace = getStorageNamespace();
     if (namespace === STORAGE_NAMESPACE_DEFAULT) {
-      return initialData.map(normalizeChat).filter(Boolean);
+      const normalized = initialData.map(normalizeChat).filter(Boolean);
+      sessionStore.chats = normalized.map((chat) => ({ ...chat }));
+      return normalized;
     }
+    sessionStore.chats = [];
     return [];
   }
 }
 
 function saveState(state) {
+  const normalized = (state ?? []).map(normalizeChat).filter(Boolean);
+  sessionStore.chats = normalized.map((chat) => ({ ...chat }));
+  if (isLiveMessagingSession()) {
+    return;
+  }
   const namespace = getStorageNamespace();
-  writeNamespacedStorage(STORAGE_KEY, namespace, state);
+  writeNamespacedStorage(STORAGE_KEY, namespace, normalized);
 }
 
 function loadDrafts() {
+  if (isLiveMessagingSession()) {
+    return { ...sessionStore.drafts };
+  }
   try {
     const namespace = getStorageNamespace();
     const store = readNamespacedStorage(DRAFTS_STORAGE_KEY);
     const raw = store[namespace];
-    if (typeof raw !== "object" || raw === null) return {};
-    return Object.fromEntries(
+    if (typeof raw !== "object" || raw === null) {
+      sessionStore.drafts = {};
+      return {};
+    }
+    const drafts = Object.fromEntries(
       Object.entries(raw).filter(([, value]) => typeof value === "string")
     );
+    sessionStore.drafts = { ...drafts };
+    return drafts;
   } catch (error) {
     console.error("Failed to load drafts", error);
+    sessionStore.drafts = {};
     return {};
   }
 }
 
 function saveDrafts(state) {
+  const snapshot = Object.fromEntries(
+    Object.entries(state ?? {}).filter(([, value]) => typeof value === "string")
+  );
+  sessionStore.drafts = { ...snapshot };
+  if (isLiveMessagingSession()) {
+    return;
+  }
   const namespace = getStorageNamespace();
-  writeNamespacedStorage(DRAFTS_STORAGE_KEY, namespace, state);
+  writeNamespacedStorage(DRAFTS_STORAGE_KEY, namespace, snapshot);
 }
 
 function loadAttachmentDrafts() {
+  if (isLiveMessagingSession()) {
+    return Object.fromEntries(
+      Object.entries(sessionStore.attachmentDrafts).map(([chatId, attachments]) => [
+        chatId,
+        (attachments ?? []).map(cloneAttachment).filter(Boolean),
+      ])
+    );
+  }
   try {
     const namespace = getStorageNamespace();
     const store = readNamespacedStorage(ATTACHMENT_DRAFTS_STORAGE_KEY);
     const parsed = store[namespace];
-    if (typeof parsed !== "object" || parsed === null) return {};
-    return Object.fromEntries(
+    if (typeof parsed !== "object" || parsed === null) {
+      sessionStore.attachmentDrafts = {};
+      return {};
+    }
+    const drafts = Object.fromEntries(
       Object.entries(parsed)
         .map(([chatId, attachments]) => {
           if (!Array.isArray(attachments)) return null;
@@ -1689,15 +1802,46 @@ function loadAttachmentDrafts() {
         })
         .filter(Boolean)
     );
+    sessionStore.attachmentDrafts = Object.fromEntries(
+      Object.entries(drafts).map(([chatId, attachments]) => [
+        chatId,
+        attachments.map(cloneAttachment).filter(Boolean),
+      ])
+    );
+    return drafts;
   } catch (error) {
     console.error("Failed to load attachment drafts", error);
+    sessionStore.attachmentDrafts = {};
     return {};
   }
 }
 
 function saveAttachmentDrafts(state) {
+  const sanitized = Object.fromEntries(
+    Object.entries(state ?? {})
+      .map(([chatId, attachments]) => {
+        if (!Array.isArray(attachments)) {
+          return null;
+        }
+        const normalized = attachments.map(cloneAttachment).filter(Boolean);
+        if (!normalized.length) {
+          return null;
+        }
+        return [chatId, normalized];
+      })
+      .filter(Boolean)
+  );
+  sessionStore.attachmentDrafts = Object.fromEntries(
+    Object.entries(sanitized).map(([chatId, attachments]) => [
+      chatId,
+      attachments.map(cloneAttachment).filter(Boolean),
+    ])
+  );
+  if (isLiveMessagingSession()) {
+    return;
+  }
   const namespace = getStorageNamespace();
-  writeNamespacedStorage(ATTACHMENT_DRAFTS_STORAGE_KEY, namespace, state);
+  writeNamespacedStorage(ATTACHMENT_DRAFTS_STORAGE_KEY, namespace, sanitized);
 }
 
 function normalizeProfile(value) {
@@ -1717,21 +1861,35 @@ function normalizeProfile(value) {
 }
 
 function loadProfile() {
+  if (isLiveMessagingSession()) {
+    return sessionStore.profile ? { ...sessionStore.profile } : { ...defaultProfile };
+  }
   try {
     const namespace = getStorageNamespace();
     const store = readNamespacedStorage(PROFILE_STORAGE_KEY);
     const raw = store[namespace];
-    if (!raw) return { ...defaultProfile };
-    return normalizeProfile(raw);
+    if (!raw) {
+      sessionStore.profile = null;
+      return { ...defaultProfile };
+    }
+    const profile = normalizeProfile(raw);
+    sessionStore.profile = { ...profile };
+    return profile;
   } catch (error) {
     console.error("Failed to load profile", error);
+    sessionStore.profile = null;
     return { ...defaultProfile };
   }
 }
 
 function saveProfile(profile) {
+  const normalized = normalizeProfile(profile);
+  sessionStore.profile = { ...normalized };
+  if (isLiveMessagingSession()) {
+    return;
+  }
   const namespace = getStorageNamespace();
-  writeNamespacedStorage(PROFILE_STORAGE_KEY, namespace, profile);
+  writeNamespacedStorage(PROFILE_STORAGE_KEY, namespace, normalized);
 }
 
 function normalizeAuthState(value) {
@@ -2151,7 +2309,11 @@ function handleRealtimeAuthError(payload) {
 
   const normalized = message.toLowerCase();
   if (normalized.includes("invalid token") || normalized.includes("missing token") || normalized.includes("token expired")) {
-    showToast("Session expired. Please sign in again.");
+    showToast({
+      message: "Session expired. Please sign in again.",
+      intent: ToastIntent.ERROR,
+      duration: 4000,
+    });
     disconnectRealtime({ keepSocket: true });
     setAuthState(null);
     return;
@@ -2172,7 +2334,7 @@ function handleRealtimeChatHistory(payload) {
   }
   realtimeState.joinedChats.add(chatId);
   const messages = Array.isArray(payload.messages) ? payload.messages : [];
-  applyServerMessages(chatId, messages, { replaceExisting: true });
+  applyServerMessages(chatId, messages, { replaceExisting: true, origin: "history" });
 }
 
 function handleRealtimeMessage(payload) {
@@ -2183,7 +2345,31 @@ function handleRealtimeMessage(payload) {
   if (!chatId) {
     return;
   }
-  applyServerMessages(chatId, [payload]);
+  applyServerMessages(chatId, [payload], { origin: "realtime" });
+}
+
+function handleRealtimeMessageError(payload) {
+  const message =
+    typeof payload?.error === "string" && payload.error.trim()
+      ? payload.error.trim()
+      : "Failed to send message.";
+  showToast({
+    message,
+    intent: ToastIntent.ERROR,
+    duration: 4000,
+  });
+}
+
+function handleRealtimeChatError(payload) {
+  const message =
+    typeof payload?.error === "string" && payload.error.trim()
+      ? payload.error.trim()
+      : "Unable to load chat conversation.";
+  showToast({
+    message,
+    intent: ToastIntent.ERROR,
+    duration: 4000,
+  });
 }
 
 function handleRealtimeDisconnect() {
@@ -2222,6 +2408,8 @@ function ensureRealtimeSocket() {
     socket.on("authError", handleRealtimeAuthError);
     socket.on("chatHistory", handleRealtimeChatHistory);
     socket.on("message", handleRealtimeMessage);
+    socket.on("messageError", handleRealtimeMessageError);
+    socket.on("chatError", handleRealtimeChatError);
     socket.on("disconnect", handleRealtimeDisconnect);
     socket.on("connect_error", handleRealtimeConnectError);
     return socket;
@@ -2310,34 +2498,71 @@ function joinChatRealtime(chatId) {
   syncRealtimeConnection();
 }
 
-function buildServerMessageContent(text, attachments = []) {
+function serializeMessageContentForServer(text, attachments = []) {
   const normalizedText = typeof text === "string" ? text.trim() : "";
-  if (normalizedText) {
-    return normalizedText;
-  }
-
   const normalizedAttachments = Array.isArray(attachments)
-    ? attachments.map((attachment) => normalizeAttachment(attachment)).filter(Boolean)
+    ? attachments.map((attachment) => serializeAttachmentForServer(attachment)).filter(Boolean)
     : [];
 
-  if (!normalizedAttachments.length) {
+  if (!normalizedText && !normalizedAttachments.length) {
     return "";
   }
 
-  const [first, ...rest] = normalizedAttachments;
-  if (isVoiceNote(first)) {
-    const duration = formatVoiceDuration(getVoiceNoteDurationSeconds(first));
-    const suffix = rest.length ? ` (+${rest.length})` : "";
-    return `[Voice message] ${duration}${suffix}`;
+  if (!normalizedAttachments.length) {
+    return normalizedText;
   }
 
-  const label = getAttachmentLabel(first);
-  const name = typeof first.name === "string" ? first.name.trim() : "";
-  if (!rest.length) {
-    return name ? `[${label}] ${name}` : `[${label}]`;
+  try {
+    return JSON.stringify({
+      text: normalizedText,
+      attachments: normalizedAttachments,
+    });
+  } catch (error) {
+    console.error("Failed to serialize message content", error);
+    return normalizedText || "";
+  }
+}
+
+function normalizeServerMessageContent(payload) {
+  if (!payload || typeof payload !== "object") {
+    return { text: "", attachments: [] };
   }
 
-  return `[Attachments] ${normalizedAttachments.length} items`;
+  const text = typeof payload.text === "string" ? payload.text : "";
+  const attachments = Array.isArray(payload.attachments)
+    ? payload.attachments.map(normalizeAttachment).filter(Boolean)
+    : [];
+
+  return { text, attachments };
+}
+
+function parseServerMessageContent(rawContent) {
+  if (typeof rawContent === "string") {
+    const trimmed = rawContent.trim();
+    if (!trimmed) {
+      return { text: "", attachments: [] };
+    }
+
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (typeof parsed === "string") {
+          return { text: parsed, attachments: [] };
+        }
+        return normalizeServerMessageContent(parsed);
+      } catch (_error) {
+        return { text: trimmed, attachments: [] };
+      }
+    }
+
+    return { text: trimmed, attachments: [] };
+  }
+
+  if (rawContent && typeof rawContent === "object") {
+    return normalizeServerMessageContent(rawContent);
+  }
+
+  return { text: "", attachments: [] };
 }
 
 function buildLocalMessageFromServer(chatId, payload) {
@@ -2345,7 +2570,7 @@ function buildLocalMessageFromServer(chatId, payload) {
     return null;
   }
 
-  const text = typeof payload.content === "string" ? payload.content : "";
+  const { text, attachments } = parseServerMessageContent(payload.content);
   const rawTimestamp = typeof payload.timestamp === "string" ? payload.timestamp : "";
   const parsed = new Date(rawTimestamp);
   const timestamp = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
@@ -2363,7 +2588,7 @@ function buildLocalMessageFromServer(chatId, payload) {
     direction,
     sentAt: timestamp.toISOString(),
     timestamp: formatTimeFromDate(timestamp),
-    attachments: [],
+    attachments,
     serverId: payload.id !== undefined && payload.id !== null ? String(payload.id) : null,
     clientId: typeof payload.client_id === "string" && payload.client_id ? payload.client_id : null,
     senderId,
@@ -2491,7 +2716,7 @@ function applyIncomingContactMetadata(chat, payload) {
   return true;
 }
 
-function applyServerMessages(chatId, serverPayloads, { replaceExisting = false } = {}) {
+function applyServerMessages(chatId, serverPayloads, { replaceExisting = false, origin = "realtime" } = {}) {
   const normalizedChatId = normalizeChatIdentifier(chatId);
   if (!normalizedChatId) {
     return;
@@ -2507,6 +2732,10 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false }
 
   const serverMessageIds = getServerMessageSet(normalizedChatId);
   let mutated = false;
+  const isRealtime = origin !== "history";
+  // Suppress toast notifications when hydrating historical conversations so we only
+  // surface alerts for real-time activity.
+  const notifications = [];
 
   if (replaceExisting) {
     if (chat.messages && chat.messages.some((message) => message && message.serverId)) {
@@ -2533,9 +2762,15 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false }
       if (existing) {
         const preservedId = existing.id;
         const preservedAttachments = Array.isArray(existing.attachments) ? existing.attachments : [];
+        const nextAttachments =
+          preservedAttachments.length > 0
+            ? preservedAttachments
+            : Array.isArray(normalizedMessage.attachments)
+            ? normalizedMessage.attachments
+            : [];
         Object.assign(existing, normalizedMessage, {
           id: preservedId,
-          attachments: preservedAttachments,
+          attachments: nextAttachments,
         });
         serverMessageIds.add(normalizedMessage.serverId);
         if (normalizedMessage.clientId) {
@@ -2552,9 +2787,15 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false }
         const existing = chat.messages.find((message) => message.id === pending.localMessageId);
         if (existing) {
           const preservedAttachments = Array.isArray(existing.attachments) ? existing.attachments : [];
+          const nextAttachments =
+            preservedAttachments.length > 0
+              ? preservedAttachments
+              : Array.isArray(normalizedMessage.attachments)
+              ? normalizedMessage.attachments
+              : [];
           Object.assign(existing, normalizedMessage, {
             id: existing.id,
-            attachments: preservedAttachments,
+            attachments: nextAttachments,
           });
           if (normalizedMessage.serverId && serverMessageIds) {
             existing.serverId = normalizedMessage.serverId;
@@ -2562,6 +2803,18 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false }
           }
           realtimeState.pendingOutgoing.delete(normalizedMessage.clientId);
           mutated = true;
+          if (isRealtime && normalizedMessage.direction === "outgoing") {
+            const chatName = getChatDisplayName(chat);
+            const preview = buildToastPreviewFromMessage(existing);
+            notifications.push({
+              message: buildToastCopy({
+                prefix: "Message sent to",
+                chatName,
+                preview,
+              }),
+              intent: ToastIntent.SUCCESS,
+            });
+          }
           return;
         }
       }
@@ -2579,6 +2832,46 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false }
     if (normalizedMessage.clientId) {
       realtimeState.pendingOutgoing.delete(normalizedMessage.clientId);
     }
+    if (isRealtime && normalizedMessage.direction === "incoming") {
+      if (!isChatInFocus(chat)) {
+        const previousUnread = Number.isFinite(chat.unreadCount) ? chat.unreadCount : 0;
+        const nextUnread = Math.min(previousUnread + 1, 999);
+        if (nextUnread !== previousUnread) {
+          chat.unreadCount = nextUnread;
+          mutated = true;
+        }
+      } else if (chat.unreadCount) {
+        chat.unreadCount = 0;
+        mutated = true;
+      }
+    }
+    if (isRealtime) {
+      if (normalizedMessage.direction === "incoming") {
+        if (shouldNotifyIncomingMessage(chat)) {
+          const chatName = getChatDisplayName(chat);
+          const preview = buildToastPreviewFromMessage(messageToInsert);
+          notifications.push({
+            message: buildToastCopy({
+              prefix: "New message from",
+              chatName,
+              preview,
+            }),
+            intent: ToastIntent.INFO,
+          });
+        }
+      } else if (normalizedMessage.direction === "outgoing") {
+        const chatName = getChatDisplayName(chat);
+        const preview = buildToastPreviewFromMessage(messageToInsert);
+        notifications.push({
+          message: buildToastCopy({
+            prefix: "Message sent to",
+            chatName,
+            preview,
+          }),
+          intent: ToastIntent.SUCCESS,
+        });
+      }
+    }
     mutated = true;
   });
 
@@ -2589,6 +2882,10 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false }
     if (activeChatId === normalizedChatId) {
       renderChatView(chat);
     }
+  }
+
+  if (isRealtime && notifications.length) {
+    notifications.forEach((notification) => showToast(notification));
   }
 }
 
@@ -2611,7 +2908,7 @@ function sendOutgoingMessageToServer(chat, message, text, attachments = []) {
     return;
   }
 
-  const content = buildServerMessageContent(text, attachments);
+  const content = serializeMessageContentForServer(text, attachments);
   if (!content) {
     return;
   }
@@ -2702,6 +2999,7 @@ function setAuthState(nextState) {
   const normalized = normalizeAuthState(nextState);
   if (!normalized) {
     authState = null;
+    resetSessionStore();
     clearAuthStateStorage();
     setActiveAuthView(AuthView.LOGIN);
     updateAuthUI();
@@ -2711,6 +3009,7 @@ function setAuthState(nextState) {
 
   authState = normalized;
   saveAuthState(authState);
+  resetSessionStore();
   applyAuthenticatedUserToProfile(authState);
   reloadStateForActiveUser({ preserveChat: false });
   updateAuthUI();
@@ -2862,6 +3161,7 @@ function reloadStateForActiveUser({ preserveChat = false } = {}) {
 
 function resetAppDataToDefaults({ auth, removeStoredData = true } = {}) {
   clearPendingAttachments();
+  resetSessionStore();
   const namespace = getStorageNamespace(auth ?? authState);
   if (removeStoredData) {
     deleteNamespacedStorage(STORAGE_KEY, namespace);
@@ -3170,88 +3470,43 @@ function setWallpaper(wallpaper) {
   }
 }
 
-function clearMessageStatusTimers(messageId) {
-  const timers = messageStatusTimers.get(messageId);
-  if (!timers) return;
-  timers.forEach((timerId) => clearTimeout(timerId));
-  messageStatusTimers.delete(messageId);
-}
-
-function updateMessageStatus(chatId, messageId, nextStatus) {
-  if (!Object.values(MessageStatus).includes(nextStatus)) return;
-  const chat = chats.find((c) => c.id === chatId);
-  if (!chat) return;
-  const message = chat.messages.find((m) => m.id === messageId);
-  if (!message || message.direction !== "outgoing") return;
-  if (message.status === nextStatus) return;
-
-  message.status = nextStatus;
-  saveState(chats);
-  renderChats(chatSearchInput.value);
-  if (chat.id === activeChatId) {
-    renderChatView(chat);
-  }
-
-  if (nextStatus === MessageStatus.READ) {
-    clearMessageStatusTimers(messageId);
-  }
-}
-
-function scheduleMessageStatus(chatId, messageId, currentStatus = MessageStatus.SENT) {
-  clearMessageStatusTimers(messageId);
-
-  const timers = [];
-  const randomWithin = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
-
-  if (currentStatus === MessageStatus.SENT) {
-    const deliveredDelay = randomWithin(700, 1300);
-    const readDelay = deliveredDelay + randomWithin(900, 1700);
-    timers.push(
-      setTimeout(() => updateMessageStatus(chatId, messageId, MessageStatus.DELIVERED), deliveredDelay)
-    );
-    timers.push(
-      setTimeout(() => updateMessageStatus(chatId, messageId, MessageStatus.READ), readDelay)
-    );
-  } else if (currentStatus === MessageStatus.DELIVERED) {
-    const readDelay = randomWithin(900, 1700);
-    timers.push(
-      setTimeout(() => updateMessageStatus(chatId, messageId, MessageStatus.READ), readDelay)
-    );
-  }
-
-  if (timers.length) {
-    messageStatusTimers.set(messageId, timers);
-  }
-}
-
-function resetMessageStatusTimers() {
-  Array.from(messageStatusTimers.values()).forEach((timers) => {
-    timers.forEach((timerId) => clearTimeout(timerId));
-  });
-  messageStatusTimers.clear();
-}
-
 function resumePendingStatuses() {
-  resetMessageStatusTimers();
   let mutated = false;
+  const validStatuses = Object.values(MessageStatus);
   chats.forEach((chat) => {
     chat.messages.forEach((message) => {
       if (message.direction !== "outgoing") return;
-      if (!Object.values(MessageStatus).includes(message.status)) {
+      if (!validStatuses.includes(message.status)) {
         message.status = MessageStatus.SENT;
         mutated = true;
       }
-      if (message.status !== MessageStatus.READ) {
-        scheduleMessageStatus(chat.id, message.id, message.status);
-      }
     });
+    const normalizedUnread =
+      Number.isFinite(chat.unreadCount) && chat.unreadCount > 0
+        ? Math.min(Math.floor(chat.unreadCount), 999)
+        : 0;
+    if (chat.unreadCount !== normalizedUnread) {
+      chat.unreadCount = normalizedUnread;
+      mutated = true;
+    }
+    if (chat.id === activeChatId && isChatInFocus(chat) && chat.unreadCount) {
+      chat.unreadCount = 0;
+      mutated = true;
+    }
   });
   if (mutated) {
     saveState(chats);
+    renderChats(chatSearchInput.value);
+    if (activeChatId) {
+      const activeChat = getActiveChat();
+      if (activeChat) {
+        renderChatView(activeChat);
+      }
+    }
   }
 }
 
-let authState = loadAuthState();
+authState = loadAuthState();
 let chats = loadState();
 let drafts = loadDrafts();
 let attachmentDrafts = loadAttachmentDrafts();
@@ -3561,6 +3816,7 @@ function renderChats(searchText = "") {
     const previewNode = chatNode.querySelector(".chat-item__preview");
     const metaNode = chatNode.querySelector(".chat-item__meta");
     const avatarNode = chatNode.querySelector(".chat-item__avatar");
+    const badgeNode = chatNode.querySelector(".chat-item__badge");
 
     nameNode.textContent = chat.name;
     avatarNode.textContent = chat.avatar ?? chat.name.slice(0, 1).toUpperCase();
@@ -3577,6 +3833,17 @@ function renderChats(searchText = "") {
 
     const lastMessage = chat.messages.at(-1);
     timestampNode.textContent = lastMessage ? formatMessageTimestamp(lastMessage) : "";
+    const unreadCount = Number.isFinite(chat.unreadCount) ? Math.max(0, chat.unreadCount) : 0;
+    if (badgeNode) {
+      if (unreadCount > 0) {
+        badgeNode.hidden = false;
+        badgeNode.textContent = unreadCount > 99 ? "99+" : String(unreadCount);
+      } else {
+        badgeNode.hidden = true;
+        badgeNode.textContent = "";
+      }
+    }
+    chatNode.classList.toggle("chat-item--unread", unreadCount > 0);
 
     const draftText = getDraft(chat.id)?.trim();
     const draftAttachments = getAttachmentDraft(chat.id);
@@ -4111,6 +4378,11 @@ function openChat(chatId) {
   activeChatId = chatId;
   pendingAttachments = getAttachmentDraft(chatId);
   const chat = getActiveChat();
+  let unreadCleared = false;
+  if (chat && chat.unreadCount) {
+    chat.unreadCount = 0;
+    unreadCleared = true;
+  }
   renderChats(chatSearchInput.value);
   if (isMessageSearchOpen) {
     shouldScrollToActiveSearchMatch = true;
@@ -4123,6 +4395,9 @@ function openChat(chatId) {
     focusMessageSearchInput();
   }
   maybeHideSidebar();
+  if (unreadCleared) {
+    saveState(chats);
+  }
 }
 
 function addMessageToChat(chatId, text, direction = "outgoing", attachments = []) {
@@ -4157,9 +4432,6 @@ function addMessageToChat(chatId, text, direction = "outgoing", attachments = []
   }
 
   saveState(chats);
-  if (isOutgoing) {
-    scheduleMessageStatus(chat.id, newMessage.id, newMessage.status);
-  }
   if (wasArchived && activeFilter === Filter.ARCHIVED) {
     setActiveFilter(Filter.ALL);
   } else {
@@ -4311,14 +4583,9 @@ function handleSend() {
   setDraft(chat.id, "");
   renderChats(chatSearchInput.value);
 
-  const toastMessage = wasArchived
-    ? "Conversation restored from archive"
-    : !hasText && attachmentsToSend.length > 1
-    ? "Attachments sent"
-    : !hasText && attachmentsToSend.length === 1
-    ? "Attachment sent"
-    : "Message sent";
-  showToast(toastMessage);
+  if (wasArchived) {
+    showToast("Conversation restored from archive");
+  }
 }
 
 function handleMessageInput(event) {
@@ -5855,7 +6122,133 @@ function autoResizeTextarea() {
   messageInput.style.height = `${messageInput.scrollHeight}px`;
 }
 
+const DEFAULT_TOAST_DURATION_MS = 2600;
+const TOAST_ICON_BY_INTENT = {
+  [ToastIntent.INFO]: "💬",
+  [ToastIntent.SUCCESS]: "✓",
+  [ToastIntent.ERROR]: "⚠️",
+};
+
 let toastTimeout = null;
+
+function getChatDisplayName(chat) {
+  if (!chat || typeof chat !== "object") {
+    return "Conversation";
+  }
+  if (typeof chat.name === "string" && chat.name.trim()) {
+    return chat.name.trim();
+  }
+  const contact = chat.contact ?? null;
+  if (contact && typeof contact === "object") {
+    if (typeof contact.displayName === "string" && contact.displayName.trim()) {
+      return contact.displayName.trim();
+    }
+    if (typeof contact.nickname === "string" && contact.nickname.trim()) {
+      return contact.nickname.trim();
+    }
+  }
+  return "Conversation";
+}
+
+function buildToastPreviewFromMessage(message) {
+  if (!message || typeof message !== "object") {
+    return "";
+  }
+  const text = typeof message.text === "string" ? message.text.trim() : "";
+  if (text) {
+    return text.length > 60 ? `${text.slice(0, 57)}…` : text;
+  }
+  const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+  if (!attachments.length) {
+    return "";
+  }
+  return formatAttachmentSummary(attachments);
+}
+
+function buildToastCopy({ prefix, chatName, preview }) {
+  const safeName = typeof chatName === "string" && chatName.trim() ? chatName.trim() : "Conversation";
+  if (preview) {
+    return `${prefix} ${safeName}: ${preview}`;
+  }
+  return `${prefix} ${safeName}`;
+}
+
+function isChatInFocus(chat) {
+  if (!chat) {
+    return false;
+  }
+  if (activeChatId !== chat.id) {
+    return false;
+  }
+  if (typeof document === "undefined") {
+    return true;
+  }
+  if (document.hidden) {
+    return false;
+  }
+  if (typeof document.hasFocus === "function") {
+    return document.hasFocus();
+  }
+  return true;
+}
+
+function shouldNotifyIncomingMessage(chat) {
+  // Avoid spamming toasts when the user is already reading the active chat.
+  if (!chat) {
+    return false;
+  }
+  return !isChatInFocus(chat);
+}
+
+function showToast(messageOrOptions, options = {}) {
+  const config =
+    typeof messageOrOptions === "string"
+      ? { message: messageOrOptions, ...options }
+      : { ...(messageOrOptions || {}), ...options };
+  const message = typeof config.message === "string" ? config.message.trim() : "";
+  if (!message) {
+    return;
+  }
+
+  const validIntents = Object.values(ToastIntent);
+  const intent = validIntents.includes(config.intent) ? config.intent : ToastIntent.INFO;
+  const duration =
+    Number.isFinite(config.duration) && config.duration > 0 ? config.duration : DEFAULT_TOAST_DURATION_MS;
+
+  let toast = document.querySelector(".toast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.className = "toast";
+    toast.setAttribute("role", "status");
+    toast.setAttribute("aria-live", "polite");
+    toast.innerHTML =
+      '<span class="toast__icon" aria-hidden="true"></span><span class="toast__message"></span>';
+    document.body.appendChild(toast);
+  }
+
+  const iconElement = toast.querySelector(".toast__icon");
+  const messageElement = toast.querySelector(".toast__message");
+  if (iconElement) {
+    iconElement.textContent = TOAST_ICON_BY_INTENT[intent] ?? TOAST_ICON_BY_INTENT[ToastIntent.INFO];
+  }
+  if (messageElement) {
+    messageElement.textContent = message;
+  } else {
+    toast.textContent = message;
+  }
+
+  toast.dataset.intent = intent;
+
+  toast.classList.remove("toast--visible");
+  void toast.offsetWidth;
+  toast.classList.add("toast--visible");
+
+  if (toastTimeout) clearTimeout(toastTimeout);
+  toastTimeout = setTimeout(() => {
+    toast.classList.remove("toast--visible");
+  }, duration);
+}
+
 let isEmojiPickerOpen = false;
 let emojiOutsideClickHandler = null;
 let isMessageSearchOpen = false;
@@ -5871,21 +6264,6 @@ let callTimerInterval = null;
 let callConnectionTimeout = null;
 let callPlanRestoreFocusTo = null;
 let callOverlayRestoreFocusTo = null;
-function showToast(message) {
-  let toast = document.querySelector(".toast");
-  if (!toast) {
-    toast = document.createElement("div");
-    toast.className = "toast";
-    document.body.appendChild(toast);
-  }
-  toast.textContent = message;
-  toast.classList.add("toast--visible");
-
-  if (toastTimeout) clearTimeout(toastTimeout);
-  toastTimeout = setTimeout(() => {
-    toast.classList.remove("toast--visible");
-  }, 2000);
-}
 
 function buildEmojiPicker() {
   if (!emojiPicker) return;
@@ -6433,6 +6811,11 @@ function hydrate() {
       resumePendingStatuses();
     }
   });
+  if (typeof window !== "undefined") {
+    window.addEventListener("focus", () => {
+      resumePendingStatuses();
+    });
+  }
 
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
