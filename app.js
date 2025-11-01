@@ -24,6 +24,11 @@ const messageSearchCloseButton = document.getElementById("message-search-close")
 const messageSearchMeta = document.getElementById("message-search-meta");
 const messageSearchPrevButton = document.getElementById("message-search-prev");
 const messageSearchNextButton = document.getElementById("message-search-next");
+
+if (messageSearchContainer) {
+  messageSearchContainer.hidden = true;
+  messageSearchContainer.setAttribute("aria-hidden", "true");
+}
 const chatSearchInput = document.getElementById("chat-search");
 const newChatButton = document.getElementById("new-chat-button");
 const toggleStarButton = document.getElementById("toggle-star");
@@ -407,6 +412,7 @@ const ToastIntent = {
   INFO: "info",
   SUCCESS: "success",
   ERROR: "error",
+  WARNING: "warning",
 };
 
 const realtimeState = {
@@ -1680,6 +1686,7 @@ function resetSessionStore() {
   sessionStore.contacts = [];
   sessionStore.profile = null;
   sessionStore.chatWallpapers = {};
+  hasShownStorageQuotaWarning = false;
 }
 
 function readNamespacedStorage(key) {
@@ -1704,7 +1711,13 @@ function readNamespacedStorage(key) {
 function writeNamespacedStorage(key, namespace, value) {
   const store = readNamespacedStorage(key);
   store[namespace] = value;
-  localStorage.setItem(key, JSON.stringify(store));
+  try {
+    localStorage.setItem(key, JSON.stringify(store));
+    return true;
+  } catch (error) {
+    console.warn(`Failed to persist data for ${key}`, error);
+    return false;
+  }
 }
 
 function deleteNamespacedStorage(key, namespace) {
@@ -1715,10 +1728,18 @@ function deleteNamespacedStorage(key, namespace) {
   delete store[namespace];
   const remainingNamespaces = Object.keys(store);
   if (remainingNamespaces.length === 0) {
-    localStorage.removeItem(key);
+    try {
+      localStorage.removeItem(key);
+    } catch (error) {
+      console.warn(`Failed to remove storage for ${key}`, error);
+    }
     return;
   }
-  localStorage.setItem(key, JSON.stringify(store));
+  try {
+    localStorage.setItem(key, JSON.stringify(store));
+  } catch (error) {
+    console.warn(`Failed to persist data for ${key}`, error);
+  }
 }
 
 function loadState() {
@@ -1762,7 +1783,16 @@ function saveState(state) {
     return;
   }
   const namespace = getStorageNamespace();
-  writeNamespacedStorage(STORAGE_KEY, namespace, normalized);
+  const persisted = writeNamespacedStorage(STORAGE_KEY, namespace, normalized);
+  if (!persisted && !hasShownStorageQuotaWarning) {
+    showToast({
+      message:
+        "Attachments for this chat are too large to store locally. They will still send, but may disappear after refresh.",
+      intent: ToastIntent.WARNING,
+      duration: 5200,
+    });
+    hasShownStorageQuotaWarning = true;
+  }
 }
 
 function loadDrafts() {
@@ -2327,6 +2357,17 @@ function recordPendingOutgoingMessage(clientId, chatId, localMessageId) {
   }
 }
 
+function queueRealtimeEmit(eventName, payload, chatId = null) {
+  if (!eventName || !payload) {
+    return;
+  }
+
+  realtimeState.pendingOutbound.push({ chatId, event: eventName, payload });
+  if (realtimeState.pendingOutbound.length > 200) {
+    realtimeState.pendingOutbound.shift();
+  }
+}
+
 function flushPendingChatJoins() {
   const socket = realtimeState.socket;
   if (!socket || !socket.connected || !realtimeState.isAuthenticated) {
@@ -2360,7 +2401,8 @@ function flushPendingOutbound() {
       return;
     }
     try {
-      socket.emit("sendMessage", entry.payload);
+      const eventName = entry.event || "sendMessage";
+      socket.emit(eventName, entry.payload);
     } catch (error) {
       console.error("Failed to flush queued message", error);
     }
@@ -2450,9 +2492,81 @@ function handleRealtimeChatHistory(payload) {
   if (!chatId) {
     return;
   }
+
+  if (Object.prototype.hasOwnProperty.call(payload, "wallpaper")) {
+    const normalizedWallpaper =
+      payload.wallpaper === null
+        ? null
+        : normalizeWallpaperSelection(payload.wallpaper);
+    if (normalizedWallpaper) {
+      setChatWallpaperOverride(chatId, normalizedWallpaper, { sync: false, silent: true });
+    } else {
+      clearChatWallpaperOverride(chatId, { sync: false, silent: true });
+    }
+  }
+
   realtimeState.joinedChats.add(chatId);
   const messages = Array.isArray(payload.messages) ? payload.messages : [];
   applyServerMessages(chatId, messages, { replaceExisting: true, origin: "history" });
+}
+
+function handleRealtimeChatWallpaperUpdate(payload) {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+
+  const chatId = normalizeChatIdentifier(payload.chat_id);
+  if (!chatId) {
+    return;
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(payload, "wallpaper")) {
+    return;
+  }
+
+  const normalizedWallpaper =
+    payload.wallpaper === null ? null : normalizeWallpaperSelection(payload.wallpaper);
+
+  if (normalizedWallpaper) {
+    setChatWallpaperOverride(chatId, normalizedWallpaper, { sync: false, silent: true });
+  } else {
+    clearChatWallpaperOverride(chatId, { sync: false, silent: true });
+  }
+
+  if (chatWallpaperModal && !chatWallpaperModal.hidden && chatId === activeChatId) {
+    populateChatWallpaperForm(getActiveChat());
+  }
+
+  const updatedBy = normalizeAccountId(payload.updated_by);
+  const currentUserId = normalizeAccountId(authState?.user?.id);
+  if (updatedBy && currentUserId && updatedBy === currentUserId) {
+    return;
+  }
+
+  const updatedByUsername =
+    typeof payload.updated_by_username === "string" && payload.updated_by_username.trim()
+      ? payload.updated_by_username.trim()
+      : "";
+
+  const wallpaperLabel = normalizedWallpaper
+    ? normalizedWallpaper.charAt(0).toUpperCase() + normalizedWallpaper.slice(1)
+    : null;
+
+  let message = normalizedWallpaper
+    ? `Chat wallpaper updated to ${wallpaperLabel}.`
+    : "Chat wallpaper reset to the app default.";
+
+  if (updatedByUsername) {
+    message = normalizedWallpaper
+      ? `${updatedByUsername} set the wallpaper to ${wallpaperLabel}.`
+      : `${updatedByUsername} reset the chat wallpaper.`;
+  }
+
+  showToast({
+    message,
+    intent: ToastIntent.INFO,
+    duration: 3200,
+  });
 }
 
 function handleRealtimeMessage(payload) {
@@ -2587,6 +2701,7 @@ function ensureRealtimeSocket() {
     socket.on("authError", handleRealtimeAuthError);
     socket.on("chatHistory", handleRealtimeChatHistory);
     socket.on("message", handleRealtimeMessage);
+    socket.on("chatWallpaper", handleRealtimeChatWallpaperUpdate);
     socket.on("messagesRead", handleRealtimeMessagesRead);
     socket.on("messageError", handleRealtimeMessageError);
     socket.on("chatError", handleRealtimeChatError);
@@ -3189,10 +3304,7 @@ function sendOutgoingMessageToServer(chat, message, text, attachments = []) {
   realtimeState.pendingChatJoins.add(normalizedChatId);
 
   if (!realtimeState.isAuthenticated || !socket.connected) {
-    realtimeState.pendingOutbound.push({ chatId: normalizedChatId, payload });
-    if (realtimeState.pendingOutbound.length > 200) {
-      realtimeState.pendingOutbound.shift();
-    }
+    queueRealtimeEmit("sendMessage", payload, normalizedChatId);
     syncRealtimeConnection();
     return;
   }
@@ -3203,10 +3315,48 @@ function sendOutgoingMessageToServer(chat, message, text, attachments = []) {
     socket.emit("sendMessage", payload);
   } catch (error) {
     console.error("Failed to send message to server", error);
-    realtimeState.pendingOutbound.push({ chatId: normalizedChatId, payload });
-    if (realtimeState.pendingOutbound.length > 200) {
-      realtimeState.pendingOutbound.shift();
-    }
+    queueRealtimeEmit("sendMessage", payload, normalizedChatId);
+  }
+}
+
+function sendChatWallpaperUpdate(chatId, wallpaper) {
+  if (!authState || !authState.token) {
+    return;
+  }
+
+  const socket = ensureRealtimeSocket();
+  if (!socket) {
+    return;
+  }
+
+  const normalizedChatId = normalizeChatIdentifier(chatId);
+  if (!normalizedChatId) {
+    return;
+  }
+
+  const normalizedWallpaper = Object.values(Wallpaper).includes(wallpaper)
+    ? wallpaper
+    : null;
+  const payload = {
+    chat_id: normalizedChatId,
+    wallpaper: normalizedWallpaper,
+  };
+
+  realtimeState.pendingChatJoins.add(normalizedChatId);
+
+  if (!realtimeState.isAuthenticated || !socket.connected) {
+    queueRealtimeEmit("chatWallpaperUpdate", payload, normalizedChatId);
+    syncRealtimeConnection();
+    return;
+  }
+
+  flushPendingChatJoins();
+
+  try {
+    socket.emit("chatWallpaperUpdate", payload);
+  } catch (error) {
+    console.error("Failed to send wallpaper update", error);
+    queueRealtimeEmit("chatWallpaperUpdate", payload, normalizedChatId);
   }
 }
 
@@ -3842,25 +3992,51 @@ function applyChatWallpaper(chatId = activeChatId) {
   applyWallpaper(wallpaper);
 }
 
-function setChatWallpaperOverride(chatId, wallpaper) {
+function normalizeWallpaperSelection(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim().toLowerCase();
+  return Object.values(Wallpaper).includes(trimmed) ? trimmed : null;
+}
+
+function setChatWallpaperOverride(chatId, wallpaper, { sync = false, silent = false } = {}) {
   const normalized = normalizeChatIdentifier(chatId);
   if (!normalized) {
     return;
   }
+
+  const isValidWallpaper = Object.values(Wallpaper).includes(wallpaper);
   const nextOverrides = { ...chatWallpaperOverrides };
-  if (Object.values(Wallpaper).includes(wallpaper)) {
+  if (isValidWallpaper) {
     nextOverrides[normalized] = wallpaper;
   } else {
     delete nextOverrides[normalized];
   }
+
+  const previousValue = Object.values(Wallpaper).includes(chatWallpaperOverrides[normalized])
+    ? chatWallpaperOverrides[normalized]
+    : null;
+  const nextValue = isValidWallpaper ? wallpaper : null;
+
+  if (previousValue === nextValue) {
+    if (sync) {
+      sendChatWallpaperUpdate(normalized, nextValue);
+    }
+    return;
+  }
+
   saveChatWallpaperOverrides(nextOverrides);
   if (normalized === activeChatId) {
     applyChatWallpaper(normalized);
   }
+  if (sync) {
+    sendChatWallpaperUpdate(normalized, nextValue);
+  }
 }
 
-function clearChatWallpaperOverride(chatId) {
-  setChatWallpaperOverride(chatId, null);
+function clearChatWallpaperOverride(chatId, options = {}) {
+  setChatWallpaperOverride(chatId, null, options);
 }
 
 function pruneChatWallpaperOverrides() {
@@ -3938,6 +4114,7 @@ let contactLookupState = {
   message: "",
 };
 let chatMessagesShouldStickToBottom = true;
+let hasShownStorageQuotaWarning = false;
 
 function getActiveChat() {
   return chats.find((chat) => chat.id === activeChatId) ?? null;
@@ -4758,6 +4935,7 @@ function renderChatView(chat) {
     const attachmentsContainer = messageNode.querySelector(".message__attachments");
 
     const messageText = typeof message.text === "string" ? message.text : "";
+    const messageTextLower = messageText.toLowerCase();
     const attachments = Array.isArray(message.attachments) ? message.attachments : [];
     const formattedTime = formatMessageTimestamp(message);
     const highlightFragment = createHighlightedFragment(
@@ -4771,12 +4949,29 @@ function renderChatView(chat) {
     } else {
       textNode.classList.add("message__text--hidden");
     }
+    const attachmentsMatch = shouldHighlight
+      ? attachments.some((attachment) => {
+          if (!attachment || typeof attachment !== "object") return false;
+          const name = typeof attachment.name === "string" ? attachment.name.toLowerCase() : "";
+          return Boolean(name && normalizedSearchQuery && name.includes(normalizedSearchQuery));
+        })
+      : false;
+    const messageMatches = !shouldHighlight
+      ? true
+      : messageTextLower.includes(normalizedSearchQuery) || attachmentsMatch;
+
     messageNode.classList.remove("message--search-active");
-    if (shouldHighlight && messageText.toLowerCase().includes(normalizedSearchQuery)) {
-      messageNode.classList.add("message--search-match");
-      matchesForChat.push({ element: messageNode });
+    if (shouldHighlight) {
+      messageNode.classList.toggle("message--search-match", messageMatches);
+      messageNode.hidden = !messageMatches;
+      messageNode.setAttribute("aria-hidden", messageMatches ? "false" : "true");
+      if (messageMatches) {
+        matchesForChat.push({ element: messageNode });
+      }
     } else {
       messageNode.classList.remove("message--search-match");
+      messageNode.hidden = false;
+      messageNode.setAttribute("aria-hidden", "false");
     }
 
     if (attachmentsContainer) {
@@ -5736,10 +5931,10 @@ function handleChatWallpaperSubmit(event) {
   const formData = new FormData(chatWallpaperForm);
   const selection = (formData.get("chat-wallpaper") || "default").toString();
   if (selection === "default") {
-    clearChatWallpaperOverride(chat.id);
+    clearChatWallpaperOverride(chat.id, { sync: true });
     showToast(`Using app wallpaper for ${chat.name}`);
   } else {
-    setChatWallpaperOverride(chat.id, selection);
+    setChatWallpaperOverride(chat.id, selection, { sync: true });
     showToast(`Applied ${selection} wallpaper to this chat`);
   }
   updateWallpaperControls(activeWallpaper);
@@ -5758,7 +5953,7 @@ function handleChatWallpaperUseDefault(event) {
     closeChatWallpaperModal();
     return;
   }
-  clearChatWallpaperOverride(chat.id);
+  clearChatWallpaperOverride(chat.id, { sync: true });
   updateWallpaperControls(activeWallpaper);
   showToast(`Using app wallpaper for ${chat.name}`);
   closeChatWallpaperModal();
@@ -6965,7 +7160,8 @@ const DEFAULT_TOAST_DURATION_MS = 2600;
 const TOAST_ICON_BY_INTENT = {
   [ToastIntent.INFO]: "💬",
   [ToastIntent.SUCCESS]: "✓",
-  [ToastIntent.ERROR]: "⚠️",
+  [ToastIntent.WARNING]: "⚠️",
+  [ToastIntent.ERROR]: "⛔",
 };
 
 let toastTimeout = null;

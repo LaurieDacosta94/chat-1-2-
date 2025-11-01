@@ -12,6 +12,8 @@ const JWT_SECRET = process.env.JWT_SECRET || 'development-secret-change-me';
 const MAX_CHAT_HISTORY = 50;
 const MAX_ACTIVITY_LOG = 250;
 
+const VALID_WALLPAPERS = new Set(['grid', 'aurora', 'bloom', 'none']);
+
 const devAdminEnvFlag = process.env.ENABLE_DEV_ADMIN;
 const devAdminEnabled =
   devAdminEnvFlag === 'true' ||
@@ -80,6 +82,7 @@ function createInMemoryStore() {
   const usersByUsername = new Map();
   const usersById = new Map();
   const messagesByChatId = new Map();
+  const chatWallpapers = new Map();
 
   return {
     insertUser({ username, passwordHash, isAdmin = false }) {
@@ -207,8 +210,27 @@ function createInMemoryStore() {
       allMessages.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
       return allMessages.slice(0, normalizedLimit).map((message) => ({ ...message }));
     },
+    setChatWallpaper(chatId, wallpaper) {
+      const normalizedId = normalizeChatId(chatId);
+      if (!normalizedId) {
+        return;
+      }
+      if (wallpaper && VALID_WALLPAPERS.has(wallpaper)) {
+        chatWallpapers.set(normalizedId, wallpaper);
+      } else {
+        chatWallpapers.delete(normalizedId);
+      }
+    },
+    getChatWallpaper(chatId) {
+      const normalizedId = normalizeChatId(chatId);
+      if (!normalizedId) {
+        return null;
+      }
+      return chatWallpapers.get(normalizedId) ?? null;
+    },
     purgeDatabase({ removeUsers = false } = {}) {
       messagesByChatId.clear();
+      chatWallpapers.clear();
       if (!removeUsers) {
         return;
       }
@@ -240,6 +262,56 @@ const forceInMemoryStore = process.env.USE_IN_MEMORY_DB === 'true';
 let useInMemoryStore = forceInMemoryStore;
 const inMemoryStore = createInMemoryStore();
 let pool = null;
+
+const chatWallpaperPreferences = new Map();
+
+function normalizeWallpaperValue(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) {
+    return null;
+  }
+
+  return VALID_WALLPAPERS.has(trimmed) ? trimmed : null;
+}
+
+function getChatWallpaperPreference(chatId) {
+  const normalizedChatId = normalizeChatId(chatId);
+  if (!normalizedChatId) {
+    return null;
+  }
+
+  if (useInMemoryStore || !pool) {
+    return inMemoryStore.getChatWallpaper(normalizedChatId);
+  }
+
+  return chatWallpaperPreferences.get(normalizedChatId) ?? null;
+}
+
+function setChatWallpaperPreference(chatId, wallpaper) {
+  const normalizedChatId = normalizeChatId(chatId);
+  if (!normalizedChatId) {
+    return null;
+  }
+
+  const normalizedWallpaper = normalizeWallpaperValue(wallpaper);
+
+  if (useInMemoryStore || !pool) {
+    inMemoryStore.setChatWallpaper(normalizedChatId, normalizedWallpaper);
+    return normalizedWallpaper;
+  }
+
+  if (normalizedWallpaper) {
+    chatWallpaperPreferences.set(normalizedChatId, normalizedWallpaper);
+  } else {
+    chatWallpaperPreferences.delete(normalizedChatId);
+  }
+
+  return normalizedWallpaper;
+}
 
 if (useInMemoryStore) {
   logInMemoryFallback('USE_IN_MEMORY_DB is enabled');
@@ -1392,7 +1464,8 @@ io.on('connection', (socket) => {
     try {
       socket.join(normalizedChatId);
       const messages = await fetchRecentMessages(normalizedChatId);
-      socket.emit('chatHistory', { chat_id: normalizedChatId, messages });
+      const wallpaper = getChatWallpaperPreference(normalizedChatId);
+      socket.emit('chatHistory', { chat_id: normalizedChatId, messages, wallpaper });
     } catch (error) {
       console.error('Error joining chat', error);
       socket.emit('chatError', { error: 'Failed to join chat.' });
@@ -1497,9 +1570,87 @@ io.on('connection', (socket) => {
       } catch (error) {
         console.error('Error sending message', error);
         socket.emit('messageError', { error: 'Failed to send message.' });
-      }
     }
-  );
+  }
+);
+
+  socket.on('chatWallpaperUpdate', async ({ chat_id: chatId, wallpaper }) => {
+    if (!authenticatedUserId) {
+      socket.emit('authError', { error: 'Authenticate before updating chat wallpaper.' });
+      return;
+    }
+
+    const normalizedChatId = normalizeChatId(chatId);
+    if (!normalizedChatId) {
+      socket.emit('chatError', { error: 'chat_id is required to update wallpaper.' });
+      return;
+    }
+
+    let requestedWallpaper = null;
+    if (typeof wallpaper === 'string') {
+      const trimmed = wallpaper.trim().toLowerCase();
+      if (trimmed === 'default' || trimmed === '') {
+        requestedWallpaper = null;
+      } else if (VALID_WALLPAPERS.has(trimmed)) {
+        requestedWallpaper = trimmed;
+      } else {
+        socket.emit('chatError', { error: 'Unsupported wallpaper selection.' });
+        return;
+      }
+    } else if (wallpaper === null || wallpaper === undefined) {
+      requestedWallpaper = null;
+    } else {
+      socket.emit('chatError', { error: 'Unsupported wallpaper selection.' });
+      return;
+    }
+
+    const previousWallpaper = getChatWallpaperPreference(normalizedChatId);
+
+    let senderUsername = null;
+    try {
+      const senderRecord = await findUserById(authenticatedUserId);
+      if (!senderRecord) {
+        socket.emit('authError', { error: 'Account no longer exists.' });
+        removeSocketForUser(authenticatedUserId, socket.id);
+        authenticatedUserId = null;
+        return;
+      }
+      senderUsername = senderRecord.username || null;
+    } catch (error) {
+      console.error('Failed to verify sender before updating wallpaper', error);
+      socket.emit('authError', { error: 'Authentication error.' });
+      return;
+    }
+
+    const appliedWallpaper = setChatWallpaperPreference(normalizedChatId, requestedWallpaper);
+    socket.join(normalizedChatId);
+
+    const payload = {
+      chat_id: normalizedChatId,
+      wallpaper: appliedWallpaper,
+      updated_by: authenticatedUserId,
+    };
+    if (senderUsername) {
+      payload.updated_by_username = senderUsername;
+    }
+
+    io.to(normalizedChatId).emit('chatWallpaper', payload);
+
+    if (previousWallpaper !== appliedWallpaper) {
+      const summary = senderUsername
+        ? `${senderUsername} changed wallpaper for chat ${normalizedChatId}.`
+        : `Wallpaper updated for chat ${normalizedChatId}.`;
+      recordActivity({
+        type: 'chat:wallpaper_updated',
+        summary,
+        details: {
+          chatId: normalizedChatId,
+          updatedBy: authenticatedUserId,
+          wallpaper: appliedWallpaper,
+        },
+      });
+    }
+  });
 
   socket.on('typing', ({ chat_id: chatId, isTyping }) => {
     if (!authenticatedUserId) return;
