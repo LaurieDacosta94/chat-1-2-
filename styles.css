@@ -1740,6 +1740,15 @@ body.modal-open {
   transform: translateY(-1px);
 }
 
+.new-chat__contact--selected {
+  border-color: rgba(37, 211, 102, 0.55);
+  background: rgba(37, 211, 102, 0.18);
+}
+
+.new-chat__contact--selected .new-chat__contact-action {
+  color: var(--accent);
+}
+
 :root[data-theme="light"] .new-chat__contact {
   background: rgba(17, 27, 33, 0.04);
 }
@@ -1748,6 +1757,11 @@ body.modal-open {
 :root[data-theme="light"] .new-chat__contact:focus-visible {
   background: rgba(0, 128, 105, 0.12);
   border-color: rgba(0, 128, 105, 0.35);
+}
+
+:root[data-theme="light"] .new-chat__contact--selected {
+  background: rgba(0, 128, 105, 0.2);
+  border-color: rgba(0, 128, 105, 0.45);
 }
 
 .new-chat__contact-details {
@@ -1791,6 +1805,75 @@ body.modal-open {
   margin-left: auto;
   font-size: 1.15rem;
   color: var(--text-muted);
+}
+
+.new-chat__actions {
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.new-chat__selection-summary {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.new-chat__action-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+.new-chat__action-button {
+  border: none;
+  border-radius: 999px;
+  padding: 0.65rem 1.25rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+
+.new-chat__action-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.new-chat__action-button--secondary {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+
+.new-chat__action-button--secondary:hover,
+.new-chat__action-button--secondary:focus-visible {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+:root[data-theme="light"] .new-chat__action-button--secondary:hover,
+:root[data-theme="light"] .new-chat__action-button--secondary:focus-visible {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.new-chat__action-button--primary {
+  background: var(--accent);
+  color: #021307;
+  box-shadow: 0 6px 16px rgba(37, 211, 102, 0.25);
+}
+
+.new-chat__action-button--primary:hover,
+.new-chat__action-button--primary:focus-visible {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(37, 211, 102, 0.35);
+}
+
+.new-chat__action-button[disabled] {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
 }
 
 .new-chat__empty {
@@ -2188,6 +2271,7 @@ body.modal-open {
   display: none !important;
 }
 
+/* Keep the lookup region steady while async search results render. */
 .new-contact__lookup {
   border: 1px solid var(--border);
   border-radius: 0.75rem;
@@ -2197,12 +2281,15 @@ body.modal-open {
   background: rgba(255, 255, 255, 0.04);
   display: grid;
   gap: 0.3rem;
+  min-height: 4.5rem;
+  align-content: center;
 }
 
 .new-contact__lookup strong {
   color: var(--text-primary);
 }
 
+/* Suggestions stay reserved so the layout doesn't shift as we toggle matches. */
 .new-contact__suggestions {
   border: 1px solid var(--border);
   border-radius: 0.75rem;
@@ -2210,10 +2297,15 @@ body.modal-open {
   display: grid;
   gap: 0.6rem;
   padding: 0.85rem 1rem;
+  min-height: 8rem;
+  max-height: 12rem;
+  overflow-y: auto;
 }
 
-.new-contact__suggestions[hidden] {
-  display: none !important;
+.new-contact__suggestions[aria-hidden="true"] {
+  visibility: hidden;
+  pointer-events: none;
+  opacity: 0;
 }
 
 .new-contact__suggestions-title {
@@ -2370,6 +2462,10 @@ body.modal-open {
   font-size: 0.9rem;
   color: var(--text-secondary);
   background: rgba(255, 255, 255, 0.03);
+  min-height: 4.5rem;
+  display: grid;
+  gap: 0.35rem;
+  align-content: center;
 }
 
 :root[data-theme="light"] .new-contact__preview {
