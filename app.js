@@ -140,6 +140,7 @@ const PROFILE_STORAGE_KEY = "whatsapp-clone-profile-v1";
 const AUTH_STORAGE_KEY = "whatsapp-clone-auth-v1";
 const CONTACTS_STORAGE_KEY = "whatsapp-clone-contacts-v1";
 const STORAGE_NAMESPACE_DEFAULT = "demo";
+const LIVE_SESSION_STORAGE_PREFIX = "live-session";
 
 const sessionStore = {
   chats: [],
@@ -148,6 +149,126 @@ const sessionStore = {
   contacts: [],
   profile: null,
 };
+
+let liveSessionStorage = null;
+let liveSessionStorageFallback = null;
+let hasShownSessionInvalidationToast = false;
+
+function ensureLiveSessionStorage() {
+  if (liveSessionStorage !== null) {
+    return liveSessionStorage;
+  }
+  if (typeof window !== "undefined" && window.sessionStorage) {
+    try {
+      const testKey = "__live_session_test__";
+      window.sessionStorage.setItem(testKey, "1");
+      window.sessionStorage.removeItem(testKey);
+      liveSessionStorage = window.sessionStorage;
+      return liveSessionStorage;
+    } catch (_error) {
+      liveSessionStorage = null;
+    }
+  }
+
+  if (liveSessionStorageFallback !== null) {
+    liveSessionStorage = liveSessionStorageFallback;
+    return liveSessionStorage;
+  }
+
+  if (typeof window === "undefined" || !window.localStorage) {
+    liveSessionStorageFallback = null;
+    liveSessionStorage = null;
+    return liveSessionStorage;
+  }
+
+  liveSessionStorageFallback = {
+    getItem(key) {
+      try {
+        return window.localStorage.getItem(key);
+      } catch (_error) {
+        return null;
+      }
+    },
+    setItem(key, value) {
+      try {
+        window.localStorage.setItem(key, value);
+      } catch (_error) {
+        // Best effort. Browsers may reject large payloads; ignore to avoid crashes.
+      }
+    },
+    removeItem(key) {
+      try {
+        window.localStorage.removeItem(key);
+      } catch (_error) {
+        // Swallow errors to keep sign-out flows resilient.
+      }
+    },
+  };
+
+  liveSessionStorage = liveSessionStorageFallback;
+  return liveSessionStorage;
+}
+
+function buildLiveSessionKey(baseKey, auth = authState) {
+  const namespace = getStorageNamespace(auth);
+  return `${LIVE_SESSION_STORAGE_PREFIX}:${baseKey}:${namespace}`;
+}
+
+function readLiveSessionValue(baseKey, auth = authState) {
+  const storage = ensureLiveSessionStorage();
+  if (!storage) {
+    return null;
+  }
+  try {
+    const raw = storage.getItem(buildLiveSessionKey(baseKey, auth));
+    if (!raw) {
+      return null;
+    }
+    return JSON.parse(raw);
+  } catch (error) {
+    console.warn(`Failed to parse live session value for ${baseKey}`, error);
+    return null;
+  }
+}
+
+function writeLiveSessionValue(baseKey, value, auth = authState) {
+  const storage = ensureLiveSessionStorage();
+  if (!storage) {
+    return;
+  }
+  const key = buildLiveSessionKey(baseKey, auth);
+  try {
+    if (value === undefined) {
+      storage.removeItem(key);
+      return;
+    }
+    storage.setItem(key, JSON.stringify(value));
+  } catch (error) {
+    console.warn(`Failed to persist live session value for ${baseKey}`, error);
+  }
+}
+
+const LIVE_SESSION_STORAGE_KEYS = [
+  STORAGE_KEY,
+  DRAFTS_STORAGE_KEY,
+  ATTACHMENT_DRAFTS_STORAGE_KEY,
+  PROFILE_STORAGE_KEY,
+  CONTACTS_STORAGE_KEY,
+];
+
+function clearLiveSessionValues(auth = authState) {
+  const storage = ensureLiveSessionStorage();
+  if (!storage) {
+    return;
+  }
+  LIVE_SESSION_STORAGE_KEYS.forEach((baseKey) => {
+    try {
+      storage.removeItem(buildLiveSessionKey(baseKey, auth));
+    } catch (_error) {
+      // Best effort cleanup. Swallow errors so sign-out always completes.
+    }
+  });
+}
 
 let authState = null;
 const apiBaseFromDataset =
@@ -1220,7 +1341,17 @@ function contactsMatch(contactA, contactB) {
 
 function loadContacts() {
   if (isLiveMessagingSession()) {
-    return sessionStore.contacts.map(normalizeContact).filter(Boolean);
+    const stored = readLiveSessionValue(CONTACTS_STORAGE_KEY);
+    if (Array.isArray(stored)) {
+      const normalized = stored.map(normalizeContact).filter(Boolean);
+      sessionStore.contacts = normalized.map((contact) => ({ ...contact }));
+      return normalized;
+    }
+    if (sessionStore.contacts.length) {
+      return sessionStore.contacts.map(normalizeContact).filter(Boolean);
+    }
+    sessionStore.contacts = [];
+    return [];
   }
   try {
     const namespace = getStorageNamespace();
@@ -1244,6 +1375,7 @@ function saveContacts(state) {
   const sanitized = (state ?? []).map(normalizeContact).filter(Boolean);
   sessionStore.contacts = sanitized.map((contact) => ({ ...contact }));
   if (isLiveMessagingSession()) {
+    writeLiveSessionValue(CONTACTS_STORAGE_KEY, sanitized);
     return;
   }
   const namespace = getStorageNamespace();
@@ -1698,7 +1830,17 @@ function deleteNamespacedStorage(key, namespace) {
 
 function loadState() {
   if (isLiveMessagingSession()) {
-    return sessionStore.chats.map(normalizeChat).filter(Boolean);
+    const stored = readLiveSessionValue(STORAGE_KEY);
+    if (Array.isArray(stored)) {
+      const normalized = stored.map(normalizeChat).filter(Boolean);
+      sessionStore.chats = normalized.map((chat) => ({ ...chat }));
+      return normalized;
+    }
+    if (sessionStore.chats.length) {
+      return sessionStore.chats.map(normalizeChat).filter(Boolean);
+    }
+    sessionStore.chats = [];
+    return [];
   }
   try {
     const namespace = getStorageNamespace();
@@ -1733,6 +1875,7 @@ function saveState(state) {
   const normalized = (state ?? []).map(normalizeChat).filter(Boolean);
   sessionStore.chats = normalized.map((chat) => ({ ...chat }));
   if (isLiveMessagingSession()) {
+    writeLiveSessionValue(STORAGE_KEY, normalized);
     return;
   }
   const namespace = getStorageNamespace();
@@ -1741,7 +1884,16 @@ function saveState(state) {
 
 function loadDrafts() {
   if (isLiveMessagingSession()) {
-    return { ...sessionStore.drafts };
+    const stored = readLiveSessionValue(DRAFTS_STORAGE_KEY);
+    if (stored && typeof stored === "object") {
+      const drafts = Object.fromEntries(
+        Object.entries(stored).filter(([, value]) => typeof value === "string")
+      );
+      sessionStore.drafts = { ...drafts };
+      return drafts;
+    }
+    sessionStore.drafts = {};
+    return {};
   }
   try {
     const namespace = getStorageNamespace();
@@ -1769,6 +1921,7 @@ function saveDrafts(state) {
   );
   sessionStore.drafts = { ...snapshot };
   if (isLiveMessagingSession()) {
+    writeLiveSessionValue(DRAFTS_STORAGE_KEY, snapshot);
     return;
   }
   const namespace = getStorageNamespace();
@@ -1777,12 +1930,33 @@ function saveDrafts(state) {
 
 function loadAttachmentDrafts() {
   if (isLiveMessagingSession()) {
-    return Object.fromEntries(
-      Object.entries(sessionStore.attachmentDrafts).map(([chatId, attachments]) => [
-        chatId,
-        (attachments ?? []).map(cloneAttachment).filter(Boolean),
-      ])
-    );
+    const stored = readLiveSessionValue(ATTACHMENT_DRAFTS_STORAGE_KEY);
+    if (stored && typeof stored === "object") {
+      const drafts = Object.fromEntries(
+        Object.entries(stored)
+          .map(([chatId, attachments]) => {
+            if (!Array.isArray(attachments)) return null;
+            const normalized = attachments.map(normalizeAttachment).filter(Boolean);
+            if (!normalized.length) return null;
+            return [chatId, normalized];
+          })
+          .filter(Boolean)
+      );
+      sessionStore.attachmentDrafts = Object.fromEntries(
+        Object.entries(drafts).map(([chatId, attachments]) => [
+          chatId,
+          attachments.map((attachment) => ({ ...attachment })),
+        ])
+      );
+      return Object.fromEntries(
+        Object.entries(drafts).map(([chatId, attachments]) => [
+          chatId,
+          attachments.map(cloneAttachment).filter(Boolean),
+        ])
+      );
+    }
+    sessionStore.attachmentDrafts = {};
+    return {};
   }
   try {
     const namespace = getStorageNamespace();
@@ -1823,7 +1997,7 @@ function saveAttachmentDrafts(state) {
         if (!Array.isArray(attachments)) {
           return null;
         }
-        const normalized = attachments.map(cloneAttachment).filter(Boolean);
+        const normalized = attachments.map(normalizeAttachment).filter(Boolean);
         if (!normalized.length) {
           return null;
         }
@@ -1834,10 +2008,11 @@ function saveAttachmentDrafts(state) {
   sessionStore.attachmentDrafts = Object.fromEntries(
     Object.entries(sanitized).map(([chatId, attachments]) => [
       chatId,
-      attachments.map(cloneAttachment).filter(Boolean),
+      attachments.map((attachment) => ({ ...attachment })),
     ])
   );
   if (isLiveMessagingSession()) {
+    writeLiveSessionValue(ATTACHMENT_DRAFTS_STORAGE_KEY, sanitized);
     return;
   }
   const namespace = getStorageNamespace();
@@ -1862,7 +2037,17 @@ function normalizeProfile(value) {
 
 function loadProfile() {
   if (isLiveMessagingSession()) {
-    return sessionStore.profile ? { ...sessionStore.profile } : { ...defaultProfile };
+    if (sessionStore.profile) {
+      return { ...sessionStore.profile };
+    }
+    const stored = readLiveSessionValue(PROFILE_STORAGE_KEY);
+    if (stored) {
+      const profile = normalizeProfile(stored);
+      sessionStore.profile = { ...profile };
+      return profile;
+    }
+    sessionStore.profile = null;
+    return { ...defaultProfile };
   }
   try {
     const namespace = getStorageNamespace();
@@ -1886,6 +2071,7 @@ function saveProfile(profile) {
   const normalized = normalizeProfile(profile);
   sessionStore.profile = { ...normalized };
   if (isLiveMessagingSession()) {
+    writeLiveSessionValue(PROFILE_STORAGE_KEY, normalized);
     return;
   }
   const namespace = getStorageNamespace();
@@ -2201,6 +2387,13 @@ async function apiRequest(path, { method = "GET", body, includeAuth = true } = {
         : typeof payload === "string" && payload
         ? payload
         : `Request failed with status ${response.status}`;
+    if (response.status === 401 && includeAuth) {
+      const normalizedMessage = message.toLowerCase();
+      const friendlyMessage = normalizedMessage.includes("no longer exists")
+        ? "Your account is no longer available. Please sign in again."
+        : message;
+      invalidateAuthenticatedSession(friendlyMessage);
+    }
     throw new Error(message);
   }
 
@@ -2308,14 +2501,21 @@ function handleRealtimeAuthError(payload) {
   realtimeState.isAuthenticated = false;
 
   const normalized = message.toLowerCase();
-  if (normalized.includes("invalid token") || normalized.includes("missing token") || normalized.includes("token expired")) {
-    showToast({
-      message: "Session expired. Please sign in again.",
-      intent: ToastIntent.ERROR,
-      duration: 4000,
-    });
+  if (
+    normalized.includes("invalid token") ||
+    normalized.includes("missing token") ||
+    normalized.includes("token expired")
+  ) {
     disconnectRealtime({ keepSocket: true });
-    setAuthState(null);
+    invalidateAuthenticatedSession("Session expired. Please sign in again.");
+    return;
+  }
+
+  if (normalized.includes("account") && normalized.includes("no longer exists")) {
+    disconnectRealtime({ keepSocket: true });
+    invalidateAuthenticatedSession(
+      "Your account is no longer available. Please sign in again."
+    );
     return;
   }
 
@@ -2599,6 +2799,12 @@ function buildLocalMessageFromServer(chatId, payload) {
   }
 
   return message;
+}
+
+function isElementNearBottom(element, threshold = 64) {
+  if (!element) return true;
+  const distance = element.scrollHeight - element.clientHeight - element.scrollTop;
+  return distance <= threshold;
 }
 
 function bootstrapChatFromServerPayload(chatId, serverPayloads) {
@@ -2996,24 +3202,50 @@ function updateAuthUI() {
 }
 
 function setAuthState(nextState) {
+  const previousAuth = authState;
   const normalized = normalizeAuthState(nextState);
   if (!normalized) {
     authState = null;
+    clearLiveSessionValues(previousAuth);
     resetSessionStore();
     clearAuthStateStorage();
+    resetVoiceRecorder();
     setActiveAuthView(AuthView.LOGIN);
     updateAuthUI();
     syncRealtimeConnection();
     return;
   }
 
+  if (
+    previousAuth &&
+    getStorageNamespace(previousAuth) !== getStorageNamespace(normalized)
+  ) {
+    clearLiveSessionValues(previousAuth);
+  }
+
   authState = normalized;
   saveAuthState(authState);
+  hasShownSessionInvalidationToast = false;
   resetSessionStore();
   applyAuthenticatedUserToProfile(authState);
   reloadStateForActiveUser({ preserveChat: false });
   updateAuthUI();
   syncRealtimeConnection();
+}
+
+function invalidateAuthenticatedSession(message) {
+  const reason = typeof message === "string" && message.trim()
+    ? message.trim()
+    : "Session expired. Please sign in again.";
+  if (!hasShownSessionInvalidationToast) {
+    showToast({
+      message: reason,
+      intent: ToastIntent.ERROR,
+      duration: 4000,
+    });
+    hasShownSessionInvalidationToast = true;
+  }
+  setAuthState(null);
 }
 
 function handleAuthTabClick(event) {
@@ -3170,6 +3402,7 @@ function resetAppDataToDefaults({ auth, removeStoredData = true } = {}) {
     deleteNamespacedStorage(PROFILE_STORAGE_KEY, namespace);
     deleteNamespacedStorage(CONTACTS_STORAGE_KEY, namespace);
   }
+  clearLiveSessionValues(auth ?? authState);
 
   reloadStateForActiveUser({ preserveChat: false });
 
@@ -3533,12 +3766,13 @@ let contactLookupState = {
   results: [],
   message: "",
 };
+let chatMessagesShouldStickToBottom = true;
 
 function getActiveChat() {
   return chats.find((chat) => chat.id === activeChatId) ?? null;
 }
 
-function createHighlightedFragment(text, query) {
+function createHighlightedFragment(text, query, options = {}) {
   const fragment = document.createDocumentFragment();
   if (!query) {
     fragment.appendChild(document.createTextNode(text));
@@ -3561,7 +3795,11 @@ function createHighlightedFragment(text, query) {
     }
 
     const highlight = document.createElement("mark");
-    highlight.className = "message__highlight";
+    const className =
+      typeof options?.className === "string" && options.className.trim()
+        ? options.className.trim()
+        : "message__highlight";
+    highlight.className = className;
     highlight.textContent = text.slice(matchIndex, matchIndex + normalizedQuery.length);
     fragment.appendChild(highlight);
 
@@ -3835,12 +4073,19 @@ function renderChats(searchText = "") {
     timestampNode.textContent = lastMessage ? formatMessageTimestamp(lastMessage) : "";
     const unreadCount = Number.isFinite(chat.unreadCount) ? Math.max(0, chat.unreadCount) : 0;
     if (badgeNode) {
-      if (unreadCount > 0) {
-        badgeNode.hidden = false;
-        badgeNode.textContent = unreadCount > 99 ? "99+" : String(unreadCount);
+      const hasUnread = unreadCount > 0;
+      badgeNode.classList.toggle("chat-item__badge--visible", hasUnread);
+      badgeNode.hidden = !hasUnread;
+      badgeNode.textContent = hasUnread ? (unreadCount > 99 ? "99+" : String(unreadCount)) : "";
+      if (hasUnread) {
+        badgeNode.setAttribute("aria-hidden", "false");
+        badgeNode.setAttribute(
+          "aria-label",
+          unreadCount === 1 ? "1 unread message" : `${unreadCount} unread messages`
+        );
       } else {
-        badgeNode.hidden = true;
-        badgeNode.textContent = "";
+        badgeNode.setAttribute("aria-hidden", "true");
+        badgeNode.removeAttribute("aria-label");
       }
     }
     chatNode.classList.toggle("chat-item--unread", unreadCount > 0);
@@ -4170,6 +4415,7 @@ function renderChatView(chat) {
     chatHeaderElement.hidden = true;
     chatComposerElement.hidden = true;
     chatMessagesElement.innerHTML = "";
+    chatMessagesShouldStickToBottom = true;
     messageInput.value = "";
     autoResizeTextarea();
     pendingAttachments = [];
@@ -4250,6 +4496,9 @@ function renderChatView(chat) {
   const normalizedSearchQuery = searchQuery.toLowerCase();
   const shouldHighlight = Boolean(isMessageSearchOpen && searchQuery);
   const matchesForChat = [];
+  const wasNearBottom = shouldHighlight
+    ? false
+    : chatMessagesShouldStickToBottom || isElementNearBottom(chatMessagesElement);
 
   chat.messages.forEach((message) => {
     const messageNode = messageTemplate.content.firstElementChild.cloneNode(true);
@@ -4360,8 +4609,11 @@ function renderChatView(chat) {
     setMessageSearchMatches([]);
   }
 
-  if (!shouldHighlight) {
+  if (!shouldHighlight && wasNearBottom) {
     chatMessagesElement.scrollTop = chatMessagesElement.scrollHeight;
+    chatMessagesShouldStickToBottom = true;
+  } else {
+    chatMessagesShouldStickToBottom = isElementNearBottom(chatMessagesElement);
   }
 
   const draftValue = getDraft(chat.id) ?? "";
@@ -4375,6 +4627,7 @@ function openChat(chatId) {
     setAttachmentDraft(activeChatId, pendingAttachments);
   }
   resetVoiceRecorder();
+  chatMessagesShouldStickToBottom = true;
   activeChatId = chatId;
   pendingAttachments = getAttachmentDraft(chatId);
   const chat = getActiveChat();
@@ -4635,6 +4888,15 @@ function readFileAsDataURL(file) {
   });
 }
 
+function readBlobAsDataURL(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error ?? new Error("Failed to read recording"));
+    reader.readAsDataURL(blob);
+  });
+}
+
 async function handleAttachmentSelection(event) {
   const input = event.target;
   if (!(input instanceof HTMLInputElement)) return;
@@ -4734,15 +4996,202 @@ function openAttachmentPicker({ accept = DEFAULT_ATTACHMENT_ACCEPT, capture = nu
 
 function updateVoiceRecorderTimer() {
   if (!voiceRecorderIsActive || !voiceRecorderTimerElement) return;
-  const elapsed = Math.max(0, Math.round((Date.now() - voiceRecorderStartedAt) / 1000));
-  voiceRecorderTimerElement.textContent = formatVoiceDuration(elapsed);
+  const elapsedSeconds = Math.max(0, Math.round((Date.now() - voiceRecorderStartedAt) / 1000));
+  voiceRecorderLastDuration = elapsedSeconds;
+  voiceRecorderTimerElement.textContent = formatVoiceDuration(elapsedSeconds);
 }
 
-function startVoiceRecorder() {
+function cleanupVoiceRecorderMedia() {
+  if (voiceRecorderMediaRecorder) {
+    try {
+      voiceRecorderMediaRecorder.ondataavailable = null;
+      voiceRecorderMediaRecorder.onerror = null;
+      voiceRecorderMediaRecorder.onstop = null;
+      if (voiceRecorderMediaRecorder.state !== "inactive") {
+        voiceRecorderMediaRecorder.stop();
+      }
+    } catch (error) {
+      console.error("Error closing voice recorder", error);
+    }
+  }
+  voiceRecorderMediaRecorder = null;
+  if (voiceRecorderStream) {
+    try {
+      voiceRecorderStream.getTracks().forEach((track) => track.stop());
+    } catch (error) {
+      console.error("Error stopping microphone stream", error);
+    }
+  }
+  voiceRecorderStream = null;
+}
+
+async function finalizeVoiceRecorder() {
+  const shouldSend = voiceRecorderPendingSend;
+  const suppressToast = voiceRecorderPendingSuppressToast;
+  const chunks = voiceRecorderChunks.slice();
+  const recorderMimeType = voiceRecorderMediaRecorder?.mimeType;
+  voiceRecorderPendingSend = false;
+  voiceRecorderPendingSuppressToast = false;
+  voiceRecorderChunks = [];
+
+  cleanupVoiceRecorderMedia();
+
+  const durationSeconds = voiceRecorderLastDuration > 0 ? voiceRecorderLastDuration : 0;
+  voiceRecorderLastDuration = 0;
+
+  if (!shouldSend) {
+    if (durationSeconds > 0 && !suppressToast) {
+      showToast("Voice recording canceled");
+    }
+    return;
+  }
+
+  const chat = getActiveChat();
+  if (!chat) {
+    if (!suppressToast) {
+      showToast("Select a chat to send voice messages");
+    }
+    return;
+  }
+
+  let attachment = null;
+  if (chunks.length) {
+    try {
+      const blob = new Blob(chunks, {
+        type: recorderMimeType || chunks[0]?.type || "audio/webm",
+      });
+      const dataUrl = await readBlobAsDataURL(blob);
+      const seconds = Math.max(1, Math.round(durationSeconds || 1));
+      const extension = blob.type.includes("ogg") ? "ogg" : "webm";
+      attachment = normalizeAttachment({
+        id: crypto.randomUUID(),
+        name: `Voice message (${formatVoiceDuration(seconds)}).${extension}`,
+        type: blob.type || recorderMimeType || "audio/webm",
+        size: blob.size,
+        dataUrl,
+        kind: AttachmentKind.AUDIO,
+        metadata: { voiceNoteDuration: seconds },
+      });
+    } catch (error) {
+      console.error("Failed to process recorded audio", error);
+    }
+  }
+
+  const fallbackDuration = Math.max(1, Math.round(durationSeconds || 1));
+  if (!attachment) {
+    attachment = createVoiceNoteAttachment(fallbackDuration);
+  }
+
+  if (!attachment) {
+    if (!suppressToast) {
+      showToast("Couldn't send voice message");
+    }
+    return;
+  }
+
+  const { message } = addMessageToChat(chat.id, "", "outgoing", [attachment]);
+  if (message) {
+    sendOutgoingMessageToServer(chat, message, message.text, message.attachments);
+    if (!suppressToast) {
+      showToast("Voice message sent");
+    }
+  }
+}
+
+async function startVoiceRecorder() {
   if (!voiceRecorderElement || voiceRecorderIsActive) return;
   const chat = getActiveChat();
   if (!chat) {
     showToast("Select a chat to record a voice message");
+    return;
+  }
+
+  if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+    showToast({
+      message: "Voice messages require a microphone.",
+      intent: ToastIntent.ERROR,
+      duration: 4000,
+    });
+    return;
+  }
+
+  try {
+    voiceRecorderStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true },
+    });
+  } catch (error) {
+    console.error("Microphone permission denied", error);
+    showToast({
+      message: "Microphone access is required to record voice messages.",
+      intent: ToastIntent.ERROR,
+      duration: 4000,
+    });
+    return;
+  }
+
+  voiceRecorderChunks = [];
+  voiceRecorderPendingSend = false;
+  voiceRecorderPendingSuppressToast = false;
+  voiceRecorderLastDuration = 0;
+
+  const recorderOptions = {};
+  if (
+    typeof window !== "undefined" &&
+    typeof window.MediaRecorder !== "undefined" &&
+    typeof window.MediaRecorder.isTypeSupported === "function"
+  ) {
+    const preferredTypes = [
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/ogg;codecs=opus",
+      "audio/mp4",
+    ];
+    const supportedType = preferredTypes.find((type) =>
+      window.MediaRecorder.isTypeSupported(type)
+    );
+    if (supportedType) {
+      recorderOptions.mimeType = supportedType;
+    }
+  }
+
+  try {
+    voiceRecorderMediaRecorder = Object.keys(recorderOptions).length
+      ? new MediaRecorder(voiceRecorderStream, recorderOptions)
+      : new MediaRecorder(voiceRecorderStream);
+  } catch (error) {
+    console.error("Failed to initialize voice recorder", error);
+    showToast({
+      message: "Recording is not supported in this browser.",
+      intent: ToastIntent.ERROR,
+      duration: 4000,
+    });
+    cleanupVoiceRecorderMedia();
+    return;
+  }
+
+  voiceRecorderMediaRecorder.addEventListener("dataavailable", (event) => {
+    if (event?.data && event.data.size > 0) {
+      voiceRecorderChunks.push(event.data);
+    }
+  });
+  voiceRecorderMediaRecorder.addEventListener("stop", () => {
+    finalizeVoiceRecorder();
+  });
+  voiceRecorderMediaRecorder.addEventListener("error", (event) => {
+    console.error("Voice recorder error", event);
+    finalizeVoiceRecorder();
+  });
+
+  try {
+    voiceRecorderMediaRecorder.start(250);
+  } catch (error) {
+    console.error("Failed to start recording", error);
+    showToast({
+      message: "Couldn't start voice recording.",
+      intent: ToastIntent.ERROR,
+      duration: 4000,
+    });
+    cleanupVoiceRecorderMedia();
     return;
   }
 
@@ -4769,18 +5218,27 @@ function startVoiceRecorder() {
   }
 
   updateVoiceRecorderTimer();
+  if (voiceRecorderTimerId) {
+    clearInterval(voiceRecorderTimerId);
+  }
   voiceRecorderTimerId = window.setInterval(updateVoiceRecorderTimer, 500);
 }
 
 function stopVoiceRecorder({ send = false, suppressToast = false } = {}) {
-  const wasActive = voiceRecorderIsActive;
+  voiceRecorderPendingSend = send;
+  voiceRecorderPendingSuppressToast = suppressToast;
+
   if (voiceRecorderTimerId) {
     clearInterval(voiceRecorderTimerId);
     voiceRecorderTimerId = null;
   }
-  const elapsedSeconds = wasActive
-    ? Math.max(1, Math.round((Date.now() - voiceRecorderStartedAt) / 1000))
-    : 0;
+
+  if (voiceRecorderIsActive) {
+    voiceRecorderLastDuration = Math.max(
+      1,
+      Math.round((Date.now() - voiceRecorderStartedAt) / 1000)
+    );
+  }
   voiceRecorderIsActive = false;
   voiceRecorderStartedAt = 0;
 
@@ -4805,31 +5263,20 @@ function stopVoiceRecorder({ send = false, suppressToast = false } = {}) {
     sendButton.removeAttribute("disabled");
   }
 
-  if (send && elapsedSeconds > 0) {
-    const chat = getActiveChat();
-    if (!chat) {
-      if (!suppressToast) {
-        showToast("Select a chat to send voice messages");
-      }
+  if (voiceRecorderMediaRecorder && voiceRecorderMediaRecorder.state !== "inactive") {
+    try {
+      voiceRecorderMediaRecorder.stop();
       return;
+    } catch (error) {
+      console.error("Failed to stop voice recorder", error);
     }
-    const attachment = createVoiceNoteAttachment(elapsedSeconds);
-    if (attachment) {
-      const { message } = addMessageToChat(chat.id, "", "outgoing", [attachment]);
-      if (message) {
-        sendOutgoingMessageToServer(chat, message, message.text, message.attachments);
-      }
-      if (!suppressToast) {
-        showToast("Voice message sent");
-      }
-    }
-  } else if (wasActive && !suppressToast) {
-    showToast("Voice recording canceled");
   }
+
+  finalizeVoiceRecorder();
 }
 
 function resetVoiceRecorder() {
-  stopVoiceRecorder({ suppressToast: true });
+  stopVoiceRecorder({ send: false, suppressToast: true });
 }
 
 function updateCallPlanSummary(plan) {
@@ -5467,7 +5914,9 @@ function renderContactSuggestions(results, query = "") {
     button.dataset.username = entry.username;
     button.setAttribute("role", "option");
 
-    const labelFragment = createHighlightedFragment(entry.username, trimmedQuery);
+    const labelFragment = createHighlightedFragment(entry.username, trimmedQuery, {
+      className: "text-highlight",
+    });
     button.appendChild(labelFragment);
 
     const meta = document.createElement("span");
@@ -6259,6 +6708,12 @@ let shouldScrollToActiveSearchMatch = false;
 let voiceRecorderTimerId = null;
 let voiceRecorderStartedAt = 0;
 let voiceRecorderIsActive = false;
+let voiceRecorderMediaRecorder = null;
+let voiceRecorderStream = null;
+let voiceRecorderChunks = [];
+let voiceRecorderPendingSend = false;
+let voiceRecorderPendingSuppressToast = false;
+let voiceRecorderLastDuration = 0;
 let activeCall = null;
 let callTimerInterval = null;
 let callConnectionTimeout = null;
@@ -6504,6 +6959,12 @@ function hydrate() {
   resumePendingStatuses();
   buildEmojiPicker();
   initializeAuthUI();
+
+  if (chatMessagesElement) {
+    chatMessagesElement.addEventListener("scroll", () => {
+      chatMessagesShouldStickToBottom = isElementNearBottom(chatMessagesElement);
+    });
+  }
 
   resetVoiceRecorder();
   if (callTimerInterval) {

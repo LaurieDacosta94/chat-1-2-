@@ -338,6 +338,7 @@ const io = new Server(server, {
     origin: corsAllowedOrigins,
     methods: ['GET', 'POST'],
   },
+  maxHttpBufferSize: 25 * 1024 * 1024,
 });
 
 app.get('/admin', (_req, res) => {
@@ -837,7 +838,7 @@ function extractTokenFromHeader(req) {
   return token || null;
 }
 
-function requireHttpAuth(req, res) {
+async function requireHttpAuth(req, res) {
   const token = extractTokenFromHeader(req);
   if (!token) {
     res.status(401).json({ error: 'Authorization required.' });
@@ -847,6 +848,18 @@ function requireHttpAuth(req, res) {
   const payload = verifyToken(token);
   if (!payload || !payload.userId) {
     res.status(401).json({ error: 'Invalid token.' });
+    return null;
+  }
+
+  try {
+    const user = await findUserById(payload.userId);
+    if (!user) {
+      res.status(401).json({ error: 'Account no longer exists.' });
+      return null;
+    }
+  } catch (error) {
+    console.error('Failed to verify user for authentication', error);
+    res.status(500).json({ error: 'Failed to authenticate user.' });
     return null;
   }
 
@@ -1098,7 +1111,7 @@ ensureDevAdminAccount().catch((error) => {
 });
 
 app.get('/api/users/search', async (req, res) => {
-  const auth = requireHttpAuth(req, res);
+  const auth = await requireHttpAuth(req, res);
   if (!auth) {
     return;
   }
@@ -1126,15 +1139,27 @@ app.get('/api/users/search', async (req, res) => {
 io.on('connection', (socket) => {
   let authenticatedUserId = null;
 
-  socket.on('authenticate', ({ token }) => {
+  socket.on('authenticate', async ({ token }) => {
     if (!token) {
       socket.emit('authError', { error: 'Missing token.' });
       return;
     }
 
     const payload = verifyToken(token);
-    if (!payload) {
+    if (!payload || !payload.userId) {
       socket.emit('authError', { error: 'Invalid token.' });
+      return;
+    }
+
+    try {
+      const user = await findUserById(payload.userId);
+      if (!user) {
+        socket.emit('authError', { error: 'Account no longer exists.' });
+        return;
+      }
+    } catch (error) {
+      console.error('Failed to authenticate socket user', error);
+      socket.emit('authError', { error: 'Authentication error.' });
       return;
     }
 
@@ -1183,12 +1208,23 @@ io.on('connection', (socket) => {
 
       try {
         let senderUsername = null;
+        let senderRecord = null;
         try {
-          const sender = await findUserById(authenticatedUserId);
-          senderUsername = sender?.username || null;
-        } catch (_lookupError) {
-          senderUsername = null;
+          senderRecord = await findUserById(authenticatedUserId);
+        } catch (lookupError) {
+          console.error('Failed to verify sender before delivering message', lookupError);
+          socket.emit('authError', { error: 'Authentication error.' });
+          return;
         }
+
+        if (!senderRecord) {
+          socket.emit('authError', { error: 'Account no longer exists.' });
+          removeSocketForUser(authenticatedUserId, socket.id);
+          authenticatedUserId = null;
+          return;
+        }
+
+        senderUsername = senderRecord.username || null;
 
         const message = await saveMessage({ chatId, senderId: authenticatedUserId, content });
         const payload = { ...message, chat_id: chatId };
