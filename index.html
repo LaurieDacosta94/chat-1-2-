@@ -151,33 +151,24 @@
           <div class="sidebar__primary-actions" role="group" aria-label="Conversation actions">
             <button
               type="button"
-              class="sidebar__primary-action sidebar__primary-action--icon-only"
+              class="sidebar__primary-action"
               id="add-contact-button"
-              aria-label="Add contact"
-              title="Add contact"
             >
-              <span aria-hidden="true">📇</span>
-              <span class="sr-only">Add contact</span>
+              Add contact
             </button>
             <button
               type="button"
-              class="sidebar__primary-action sidebar__primary-action--accent sidebar__primary-action--icon-only"
+              class="sidebar__primary-action sidebar__primary-action--accent"
               id="start-new-chat-button"
-              aria-label="Start new chat"
-              title="Start new chat"
             >
-              <span aria-hidden="true">💬</span>
-              <span class="sr-only">Start new chat</span>
+              Start new chat
             </button>
             <button
               type="button"
-              class="sidebar__primary-action sidebar__primary-action--icon-only"
+              class="sidebar__primary-action"
               id="start-new-group-button"
-              aria-label="Start new group"
-              title="Start new group"
             >
-              <span aria-hidden="true">👥</span>
-              <span class="sr-only">Start new group</span>
+              Start new group
             </button>
           </div>
         </div>
@@ -323,13 +314,6 @@
           </button>
         </div>
       </header>
-      <div class="chat__participants" id="chat-participants" hidden aria-hidden="true">
-        <button type="button" class="chat__participants-add" id="chat-add-participant">
-          <span aria-hidden="true">➕</span>
-          <span>Add participants</span>
-        </button>
-        <div class="chat__participants-list" id="chat-participants-list" role="list"></div>
-      </div>
       <div class="chat__message-search" id="message-search" role="search" hidden aria-hidden="true">
         <div class="chat__message-search-input">
           <input
@@ -581,6 +565,22 @@
             Search for someone already using the app or add a new username to start chatting
             right away.
           </p>
+          <fieldset class="new-contact__method">
+            <legend class="new-contact__method-title">Conversation type</legend>
+            <div class="new-contact__method-options">
+              <label class="new-contact__method-option">
+                <input type="radio" name="contact-method" value="nickname" checked />
+                <span>Direct message</span>
+              </label>
+              <label class="new-contact__method-option">
+                <input type="radio" name="contact-method" value="group" />
+                <span>Group chat</span>
+              </label>
+            </div>
+            <p class="new-contact__method-description">
+              Choose whether you want to start a one-on-one conversation or create a new group.
+            </p>
+          </fieldset>
           <div class="new-contact__fields" data-contact-fields="nickname">
             <label class="new-contact__field">
               <span class="new-contact__label">Username</span>
@@ -592,6 +592,47 @@
                 placeholder="Enter a username"
                 required
               />
+            </label>
+          </div>
+          <div class="new-contact__fields" data-contact-fields="group" hidden>
+            <label class="new-contact__field">
+              <span class="new-contact__label">Group name</span>
+              <input
+                type="text"
+                id="new-group-name"
+                name="group-name"
+                placeholder="Weekend plans"
+                disabled
+                required
+              />
+              <span class="new-contact__description">Visible to everyone in the group.</span>
+            </label>
+            <label class="new-contact__field">
+              <span class="new-contact__label">Participants</span>
+              <textarea
+                id="new-group-participants"
+                name="group-participants"
+                rows="3"
+                placeholder="Add one name or email per line"
+                disabled
+                required
+              ></textarea>
+              <span class="new-contact__description">
+                Add at least two participants. Separate names with commas or line breaks.
+              </span>
+            </label>
+            <label class="new-contact__field">
+              <span class="new-contact__label">Description (optional)</span>
+              <textarea
+                id="new-group-description"
+                name="group-description"
+                rows="2"
+                placeholder="What's this group about?"
+                disabled
+              ></textarea>
+              <span class="new-contact__description">
+                Appears under the group name to help everyone stay aligned.
+              </span>
             </label>
           </div>
           <div class="new-contact__lookup" id="new-contact-lookup" aria-live="polite">
@@ -630,55 +671,6 @@
           </div>
         </form>
       </div>
-    </div>
-  </div>
-
-  <div class="modal" id="new-group-modal" role="dialog" aria-modal="true" aria-labelledby="new-group-title" hidden>
-    <div class="modal__backdrop" data-close-modal></div>
-    <div class="modal__content" role="document">
-      <header class="modal__header">
-        <h2 class="modal__title" id="new-group-title">Start new group</h2>
-        <button
-          class="icon-button modal__close"
-          id="new-group-close"
-          aria-label="Close start new group"
-        >
-          ✕
-        </button>
-      </header>
-      <form class="new-group" id="new-group-form" autocomplete="off">
-        <p class="new-group__intro">
-          Give your group a name. You can add participants from the chat header after creating it.
-        </p>
-        <label class="new-group__field">
-          <span class="new-group__label">Group name</span>
-          <input
-            type="text"
-            id="new-group-name"
-            name="group-name"
-            placeholder="Weekend plans"
-            required
-          />
-        </label>
-        <label class="new-group__field">
-          <span class="new-group__label">Description (optional)</span>
-          <textarea
-            id="new-group-description"
-            name="group-description"
-            rows="2"
-            placeholder="What's this group about?"
-          ></textarea>
-          <span class="new-group__description">
-            Appears under the group name to give everyone context.
-          </span>
-        </label>
-        <div class="new-group__actions">
-          <button type="button" class="new-group__button new-group__button--secondary" id="new-group-cancel">
-            Cancel
-          </button>
-          <button type="submit" class="new-group__button new-group__button--primary">Create group</button>
-        </div>
-      </form>
     </div>
   </div>
 
