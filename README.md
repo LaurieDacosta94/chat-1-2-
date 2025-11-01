@@ -82,22 +82,6 @@ The script installs `node_modules` on first run and then serves the backend on p
    ```
    The Express server listens on `/api/*` for REST endpoints and upgrades the same HTTP server to Socket.io for real-time events.
 
-### Render deployment
-
-Render deployments can call the bundled helper to perform common setup steps before launching the long-running Node process. The script:
-
-- Installs dependencies if `node_modules/` is missing (useful on new instances).
-- Applies [`db/schema.sql`](db/schema.sql) automatically when `psql` is available and database credentials are present.
-- Starts either the backend, the static frontend, or both depending on `RENDER_START_MODE` (`backend`, `frontend`, or `all`).
-
-Invoke it from Render (or any CI/CD host) via:
-
-```bash
-npm run render:start
-```
-
-By default the backend server is started. To launch a different target set an environment variable, for example `RENDER_START_MODE=all` to serve the API and static frontend from the same dyno.
-
 ## API Overview
 
 ### REST Endpoints
