@@ -148,14 +148,29 @@
           >
             ⚙️
           </button>
-          <button
-            class="sidebar__new-chat"
-            id="new-chat-button"
-            title="Start new chat"
-            aria-label="Start new chat"
-          >
-            +
-          </button>
+          <div class="sidebar__primary-actions" role="group" aria-label="Conversation actions">
+            <button
+              type="button"
+              class="sidebar__primary-action"
+              id="add-contact-button"
+            >
+              Add contact
+            </button>
+            <button
+              type="button"
+              class="sidebar__primary-action sidebar__primary-action--accent"
+              id="start-new-chat-button"
+            >
+              Start new chat
+            </button>
+            <button
+              type="button"
+              class="sidebar__primary-action"
+              id="start-new-group-button"
+            >
+              Start new group
+            </button>
+          </div>
         </div>
       </header>
       <button
