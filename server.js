@@ -11,6 +11,7 @@ const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'development-secret-change-me';
 const MAX_CHAT_HISTORY = 50;
 const MAX_ACTIVITY_LOG = 250;
+const LINK_PREVIEW_TIMEOUT_MS = 7000;
 
 const VALID_WALLPAPERS = new Set(['grid', 'aurora', 'bloom', 'none']);
 
@@ -763,6 +764,46 @@ async function findUserById(userId) {
   }
 }
 
+async function findUsersByIds(userIds = []) {
+  const normalizedIds = Array.from(
+    new Set(
+      userIds
+        .map((value) => {
+          const numeric = Number.parseInt(value, 10);
+          return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+        })
+        .filter((value) => value !== null)
+    )
+  );
+
+  if (!normalizedIds.length) {
+    return [];
+  }
+
+  if (useInMemoryStore || !pool) {
+    return normalizedIds
+      .map((id) => inMemoryStore.findUserById(id))
+      .filter((record) => record);
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT id, username, is_admin, created_at
+       FROM users
+       WHERE id = ANY($1::int[])`,
+      [normalizedIds]
+    );
+    return result.rows;
+  } catch (error) {
+    if (enableInMemoryFallback(error)) {
+      return normalizedIds
+        .map((id) => inMemoryStore.findUserById(id))
+        .filter((record) => record);
+    }
+    throw error;
+  }
+}
+
 async function searchUsers(query, limit = 5) {
   const normalizedLimit = Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 25) : 5;
 
@@ -1094,6 +1135,90 @@ function extractTokenFromHeader(req) {
   return token || null;
 }
 
+function decodeHtmlEntities(text) {
+  if (typeof text !== 'string') {
+    return '';
+  }
+  return text
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'");
+}
+
+function extractMetaContent(html, attribute, value) {
+  if (typeof html !== 'string' || !html) {
+    return '';
+  }
+  const attr = attribute === 'property' ? 'property' : 'name';
+  const pattern = new RegExp(
+    `<meta[^>]+${attr}\\s*=\\s*['"]${value}['"][^>]*content\\s*=\\s*['"]([^"']*)['"]`,
+    'i'
+  );
+  const match = pattern.exec(html);
+  if (match && match[1]) {
+    return decodeHtmlEntities(match[1].trim());
+  }
+  const altPattern = new RegExp(
+    `<meta[^>]+content\\s*=\\s*['"]([^"']*)['"][^>]*${attr}\\s*=\\s*['"]${value}['"]`,
+    'i'
+  );
+  const altMatch = altPattern.exec(html);
+  if (altMatch && altMatch[1]) {
+    return decodeHtmlEntities(altMatch[1].trim());
+  }
+  return '';
+}
+
+function extractTitleTag(html) {
+  if (typeof html !== 'string' || !html) {
+    return '';
+  }
+  const match = html.match(/<title[^>]*>([^<]*)<\/title>/i);
+  if (match && match[1]) {
+    return decodeHtmlEntities(match[1].trim());
+  }
+  return '';
+}
+
+async function resolveLinkPreview(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), LINK_PREVIEW_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      redirect: 'follow',
+      headers: { 'user-agent': 'Mozilla/5.0 (compatible; LinkPreviewBot/1.0)' },
+    });
+
+    const contentType = response.headers.get('content-type') || '';
+    if (!response.ok || !contentType.includes('text/html')) {
+      return { url };
+    }
+
+    const html = await response.text();
+    const title = extractMetaContent(html, 'property', 'og:title') || extractTitleTag(html);
+    const description =
+      extractMetaContent(html, 'property', 'og:description') ||
+      extractMetaContent(html, 'name', 'description');
+    const image = extractMetaContent(html, 'property', 'og:image');
+    const siteName =
+      extractMetaContent(html, 'property', 'og:site_name') ||
+      extractMetaContent(html, 'name', 'author') ||
+      new URL(url).host;
+
+    const payload = { url };
+    if (title) payload.title = title;
+    if (description) payload.description = description;
+    if (image) payload.image = image;
+    if (siteName) payload.siteName = siteName;
+    return payload;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function requireHttpAuth(req, res) {
   const token = extractTokenFromHeader(req);
   if (!token) {
@@ -1415,6 +1540,72 @@ app.get('/api/users/search', async (req, res) => {
   } catch (error) {
     console.error('Error searching for users', error);
     res.status(500).json({ error: 'Failed to search users.' });
+  }
+});
+
+app.get('/api/users/lookup', async (req, res) => {
+  const auth = await requireHttpAuth(req, res);
+  if (!auth) {
+    return;
+  }
+
+  const idsParam = typeof req.query.ids === 'string' ? req.query.ids : '';
+  const rawIds = idsParam
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value) => value);
+
+  if (!rawIds.length) {
+    res.status(400).json({ error: 'ids query parameter is required.' });
+    return;
+  }
+
+  try {
+    const users = await findUsersByIds(rawIds);
+    const filtered = users.filter((user) => user && user.id !== auth.userId);
+    res.json({
+      results: filtered.map((user) => ({
+        id: user.id,
+        username: user.username,
+        displayName: user.username,
+      })),
+    });
+  } catch (error) {
+    console.error('Error looking up users by id', error);
+    res.status(500).json({ error: 'Failed to lookup users.' });
+  }
+});
+
+app.get('/api/link-preview', async (req, res) => {
+  const auth = await requireHttpAuth(req, res);
+  if (!auth) {
+    return;
+  }
+
+  const rawUrl = typeof req.query.url === 'string' ? req.query.url.trim() : '';
+  if (!rawUrl) {
+    res.status(400).json({ error: 'url query parameter is required.' });
+    return;
+  }
+
+  let normalizedUrl;
+  try {
+    const parsed = new URL(rawUrl);
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      throw new Error('Unsupported protocol');
+    }
+    normalizedUrl = parsed.toString();
+  } catch (error) {
+    res.status(400).json({ error: 'A valid http(s) URL is required.' });
+    return;
+  }
+
+  try {
+    const preview = await resolveLinkPreview(normalizedUrl);
+    res.json(preview);
+  } catch (error) {
+    console.error('Error resolving link preview', error);
+    res.json({ url: normalizedUrl });
   }
 });
 
