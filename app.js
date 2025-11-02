@@ -5463,6 +5463,59 @@ function updateCallControls(chat) {
   }
 }
 
+function getSelfParticipantName() {
+  const profileName =
+    typeof activeProfile?.name === "string" && activeProfile.name.trim()
+      ? activeProfile.name.trim()
+      : "";
+  if (profileName) {
+    return profileName;
+  }
+
+  const authUsername =
+    typeof authState?.user?.username === "string" && authState.user.username.trim()
+      ? authState.user.username.trim()
+      : "";
+  if (authUsername) {
+    return authUsername;
+  }
+
+  return "You";
+}
+
+function getDirectChatParticipants(chat) {
+  const participants = [];
+  const selfName = getSelfParticipantName();
+  if (selfName) {
+    participants.push(selfName);
+  }
+
+  const normalizedContact = normalizeContact(chat?.contact);
+  const contactName = normalizedContact
+    ? normalizedContact.displayName || normalizedContact.name || normalizedContact.nickname || ""
+    : "";
+  const fallbackName = typeof chat?.name === "string" ? chat.name.trim() : "";
+  const resolvedContactName = contactName || fallbackName;
+  if (resolvedContactName) {
+    participants.push(resolvedContactName);
+  }
+
+  const seen = new Set();
+  return participants
+    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .filter((value) => {
+      if (!value) {
+        return false;
+      }
+      const key = value.toLowerCase();
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+}
+
 function renderChatParticipants(chat) {
   if (!chatParticipantsElement) {
     return;
@@ -5470,15 +5523,21 @@ function renderChatParticipants(chat) {
 
   chatParticipantsElement.innerHTML = "";
 
-  if (!chat || chat.type !== ChatType.GROUP) {
+  if (!chat) {
     chatParticipantsElement.hidden = true;
     chatParticipantsElement.setAttribute("aria-hidden", "true");
     chatParticipantsElement.removeAttribute("aria-label");
     return;
   }
 
-  const participants = normalizeGroupParticipants(chat.participants);
-  if (participants.length <= 2) {
+  let participants = [];
+  if (chat.type === ChatType.GROUP) {
+    participants = normalizeGroupParticipants(chat.participants);
+  } else if (chat.type === ChatType.DIRECT) {
+    participants = getDirectChatParticipants(chat);
+  }
+
+  if (!participants.length) {
     chatParticipantsElement.hidden = true;
     chatParticipantsElement.setAttribute("aria-hidden", "true");
     chatParticipantsElement.removeAttribute("aria-label");
@@ -5503,7 +5562,9 @@ function renderChatParticipants(chat) {
 
   chatParticipantsElement.hidden = false;
   chatParticipantsElement.setAttribute("aria-hidden", "false");
-  const countLabel = `${participants.length} participants`;
+  const countLabel = `${participants.length} participant${
+    participants.length === 1 ? "" : "s"
+  }`;
   chatParticipantsElement.setAttribute("aria-label", countLabel);
 }
 
@@ -8622,11 +8683,32 @@ function maybeHideSidebar() {
   hideSidebar();
 }
 
+function isSupportedSwipePointerType(pointerType) {
+  const normalized = typeof pointerType === "string" ? pointerType.toLowerCase() : "";
+  if (!normalized) {
+    return true;
+  }
+  return normalized === "touch" || normalized === "mouse" || normalized === "pen";
+}
+
+function isPrimarySwipePointer(event) {
+  if (!isSupportedSwipePointerType(event.pointerType)) {
+    return false;
+  }
+  if (event.isPrimary === false) {
+    return false;
+  }
+  if (typeof event.button === "number" && event.button > 0) {
+    return false;
+  }
+  return true;
+}
+
 function handleSidebarPointerDown(event) {
   if (!sidebarElement || window.innerWidth > 900) {
     return;
   }
-  if (event.pointerType && event.pointerType !== "touch") {
+  if (!isPrimarySwipePointer(event)) {
     return;
   }
   if (!sidebarElement.classList.contains("sidebar--visible")) {
@@ -8634,6 +8716,7 @@ function handleSidebarPointerDown(event) {
   }
   swipeTracking = {
     pointerId: event.pointerId,
+    pointerType: typeof event.pointerType === "string" ? event.pointerType.toLowerCase() : "",
     target: "sidebar",
     startX: event.clientX,
     startY: event.clientY,
@@ -8645,7 +8728,7 @@ function handleChatPointerDown(event) {
   if (!chatElement || !sidebarElement || window.innerWidth > 900) {
     return;
   }
-  if (event.pointerType && event.pointerType !== "touch") {
+  if (!isPrimarySwipePointer(event)) {
     return;
   }
   if (sidebarElement.classList.contains("sidebar--visible")) {
@@ -8656,6 +8739,7 @@ function handleChatPointerDown(event) {
   }
   swipeTracking = {
     pointerId: event.pointerId,
+    pointerType: typeof event.pointerType === "string" ? event.pointerType.toLowerCase() : "",
     target: "chat",
     startX: event.clientX,
     startY: event.clientY,
@@ -8667,7 +8751,17 @@ function handleSwipePointerMove(event) {
   if (!swipeTracking || event.pointerId !== swipeTracking.pointerId) {
     return;
   }
-  if (event.pointerType && event.pointerType !== "touch") {
+  if (!isSupportedSwipePointerType(swipeTracking.pointerType)) {
+    swipeTracking = null;
+    return;
+  }
+
+  if (
+    swipeTracking.pointerType === "mouse" &&
+    typeof event.buttons === "number" &&
+    event.buttons === 0
+  ) {
+    swipeTracking = null;
     return;
   }
 
@@ -8694,10 +8788,6 @@ function handleSwipePointerMove(event) {
 
 function handleSwipePointerEnd(event) {
   if (!swipeTracking || event.pointerId !== swipeTracking.pointerId) {
-    return;
-  }
-  if (event.pointerType && event.pointerType !== "touch") {
-    swipeTracking = null;
     return;
   }
 
