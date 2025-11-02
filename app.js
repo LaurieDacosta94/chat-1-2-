@@ -5516,6 +5516,22 @@ function getDirectChatParticipants(chat) {
     });
 }
 
+function getManageableParticipantNames(chat) {
+  if (!chat) {
+    return [];
+  }
+
+  if (chat.type === ChatType.GROUP) {
+    return normalizeGroupParticipants(chat.participants);
+  }
+
+  if (chat.type === ChatType.DIRECT) {
+    return normalizeGroupParticipants(getDirectChatParticipants(chat));
+  }
+
+  return [];
+}
+
 function renderChatParticipants(chat) {
   if (!chatParticipantsElement) {
     return;
@@ -5670,12 +5686,10 @@ function renderChatView(chat) {
   renderChatParticipants(chat);
 
   if (manageParticipantsButton) {
-    const canManageParticipants = chat.type === ChatType.GROUP;
-    manageParticipantsButton.hidden = !canManageParticipants;
-    manageParticipantsButton.disabled = !canManageParticipants;
-    const label = canManageParticipants
-      ? `Add participants to ${chat.name}`
-      : "Add participants";
+    const hasChat = Boolean(chat);
+    manageParticipantsButton.hidden = !hasChat;
+    manageParticipantsButton.disabled = !hasChat;
+    const label = hasChat ? `Add participants to ${chat.name}` : "Add participants";
     manageParticipantsButton.setAttribute("aria-label", label);
     manageParticipantsButton.setAttribute("title", label);
   }
@@ -7612,24 +7626,24 @@ function renderManageParticipantsOptions(query = manageParticipantsSearchInput?.
   const normalizedQuery = rawQuery.toLowerCase();
   manageParticipantsListElement.innerHTML = "";
 
-  if (!chat || chat.type !== ChatType.GROUP) {
+  if (!chat) {
     if (manageParticipantsEmptyElement) {
       manageParticipantsEmptyElement.hidden = false;
       const heading = manageParticipantsEmptyElement.querySelector("strong");
       const copy = manageParticipantsEmptyElement.querySelector("p");
       if (heading) {
-        heading.textContent = "Group chat required";
+        heading.textContent = "Select a conversation";
       }
       if (copy) {
-        copy.textContent = "Select a group conversation to add participants.";
+        copy.textContent = "Choose a chat to invite additional participants.";
       }
     }
     updateManageParticipantsConfirmState();
     return;
   }
 
-  const existingList = normalizeGroupParticipants(chat.participants);
-  const existingSet = new Set(existingList);
+  const existingList = getManageableParticipantNames(chat);
+  const existingSet = new Set(existingList.map((name) => name.toLowerCase()));
   const available = sortContacts(contacts);
   const filteredContacts = normalizedQuery
     ? available.filter((contact) => contactMatchesQuery(contact, normalizedQuery))
@@ -7651,11 +7665,21 @@ function renderManageParticipantsOptions(query = manageParticipantsSearchInput?.
       normalized.phone ||
       "Contact";
     const sanitizedName = normalizeGroupParticipants([displayName])[0];
-    if (!sanitizedName || seenParticipants.has(sanitizedName)) {
+    if (!sanitizedName) {
       return;
     }
-    seenParticipants.add(sanitizedName);
-    options.push({ contact: normalized, displayName, sanitizedName, rawQuery });
+    const sanitizedKey = sanitizedName.toLowerCase();
+    if (seenParticipants.has(sanitizedKey)) {
+      return;
+    }
+    seenParticipants.add(sanitizedKey);
+    options.push({
+      contact: normalized,
+      displayName,
+      sanitizedName,
+      sanitizedKey,
+      rawQuery,
+    });
   });
 
   if (!options.length) {
@@ -7669,7 +7693,7 @@ function renderManageParticipantsOptions(query = manageParticipantsSearchInput?.
       if (copy) {
         copy.textContent = normalizedQuery
           ? "Try searching with a different name or detail."
-          : "Add contacts to invite them to the group chat.";
+          : "Add contacts to invite them to the chat.";
       }
     }
     updateManageParticipantsConfirmState();
@@ -7680,7 +7704,7 @@ function renderManageParticipantsOptions(query = manageParticipantsSearchInput?.
     manageParticipantsEmptyElement.hidden = true;
   }
 
-  options.forEach(({ contact, displayName, sanitizedName, rawQuery: optionQuery }) => {
+  options.forEach(({ contact, displayName, sanitizedName, sanitizedKey, rawQuery: optionQuery }) => {
     const listItem = document.createElement("li");
     listItem.className = "new-chat__list-item";
 
@@ -7706,7 +7730,7 @@ function renderManageParticipantsOptions(query = manageParticipantsSearchInput?.
       (contact.nickname && contact.nickname !== displayName ? contact.nickname : "") ||
       getContactPreviewText(contact) ||
       deriveContactStatus(contact);
-    if (existingSet.has(sanitizedName)) {
+    if (existingSet.has(sanitizedKey)) {
       checkbox.checked = true;
       checkbox.disabled = true;
       label.classList.add("new-chat__contact--existing");
@@ -7763,8 +7787,8 @@ function openManageParticipantsModal() {
   }
 
   const chat = getActiveChat();
-  if (!chat || chat.type !== ChatType.GROUP) {
-    showToast("Participants can only be managed in group chats");
+  if (!chat) {
+    showToast("Select a conversation to add participants");
     return;
   }
 
@@ -7859,7 +7883,7 @@ function handleManageParticipantsSearch(event) {
 
 function handleManageParticipantsConfirm() {
   const chat = getActiveChat();
-  if (!chat || chat.type !== ChatType.GROUP) {
+  if (!chat) {
     closeManageParticipantsModal();
     return;
   }
@@ -7879,17 +7903,18 @@ function handleManageParticipantsConfirm() {
     return;
   }
 
-  const existingOrdered = normalizeGroupParticipants(chat.participants);
-  const existingSet = new Set(existingOrdered);
+  const existingOrdered = getManageableParticipantNames(chat);
+  const existingSet = new Set(existingOrdered.map((name) => name.toLowerCase()));
   const addedNames = [];
 
   selectedInputs.forEach((input) => {
     const name = input.dataset.participantName ?? input.value ?? "";
     const normalized = normalizeGroupParticipants([name])[0];
-    if (!normalized || existingSet.has(normalized)) {
+    const key = typeof normalized === "string" ? normalized.toLowerCase() : "";
+    if (!key || existingSet.has(key)) {
       return;
     }
-    existingSet.add(normalized);
+    existingSet.add(key);
     addedNames.push(normalized);
   });
 
@@ -7899,8 +7924,26 @@ function handleManageParticipantsConfirm() {
     return;
   }
 
-  const updatedParticipants = [...existingOrdered, ...addedNames];
+  const updatedParticipants = normalizeGroupParticipants([
+    ...existingOrdered,
+    ...addedNames,
+  ]);
+
+  const wasGroup = chat.type === ChatType.GROUP;
   chat.participants = updatedParticipants;
+  if (!wasGroup) {
+    // Promote direct conversations to groups once additional participants are added so
+    // future management reuses the shared group code paths.
+    chat.type = ChatType.GROUP;
+    if (chat.contact) {
+      delete chat.contact;
+    }
+    chat.capabilities = {
+      audio: chat.capabilities?.audio !== false,
+      video: chat.capabilities?.video !== false,
+      phone: false,
+    };
+  }
   chat.status = deriveGroupStatus(chat.participants, chat.description);
   saveState(chats);
   renderChats(chatSearchInput.value);
@@ -7908,7 +7951,10 @@ function handleManageParticipantsConfirm() {
   closeManageParticipantsModal();
 
   const count = addedNames.length;
-  showToast(`Added ${count} participant${count === 1 ? "" : "s"}`);
+  const toastMessage = wasGroup
+    ? `Added ${count} participant${count === 1 ? "" : "s"}`
+    : `Created a group chat and added ${count} participant${count === 1 ? "" : "s"}`;
+  showToast(toastMessage);
 }
 
 function showNewChatView(view, { focus = true } = {}) {
@@ -8732,9 +8778,6 @@ function handleChatPointerDown(event) {
     return;
   }
   if (sidebarElement.classList.contains("sidebar--visible")) {
-    return;
-  }
-  if (event.clientX > 40) {
     return;
   }
   swipeTracking = {
