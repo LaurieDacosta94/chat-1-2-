@@ -4,6 +4,7 @@ const chatHeaderElement = document.getElementById("chat-header");
 const chatMessagesElement = document.getElementById("chat-messages");
 const chatComposerElement = document.getElementById("chat-composer");
 const chatPlaceholderElement = document.getElementById("chat-placeholder");
+const chatElement = document.getElementById("chat");
 const chatNameElement = document.getElementById("chat-name");
 const chatStatusElement = document.getElementById("chat-status");
 const chatAvatarElement = document.getElementById("chat-avatar");
@@ -33,7 +34,10 @@ const chatSearchInput = document.getElementById("chat-search");
 const newChatButton = document.getElementById("new-chat-button");
 const toggleStarButton = document.getElementById("toggle-star");
 const toggleArchiveButton = document.getElementById("toggle-archive");
+const manageParticipantsButton = document.getElementById("manage-participants");
+const deleteChatButton = document.getElementById("delete-chat");
 const chatWallpaperButton = document.getElementById("customize-chat-wallpaper");
+const chatParticipantsElement = document.getElementById("chat-participants");
 const filterChips = Array.from(document.querySelectorAll(".filter-chip"));
 const filterCountElements = {
   all: document.querySelector('[data-filter-count="all"]'),
@@ -119,6 +123,13 @@ const chatWallpaperApplyButton = document.getElementById("chat-wallpaper-apply")
 const chatWallpaperOptions = chatWallpaperForm
   ? Array.from(chatWallpaperForm.querySelectorAll('input[name="chat-wallpaper"]'))
   : [];
+const manageParticipantsModal = document.getElementById("manage-participants-modal");
+const manageParticipantsCloseButton = document.getElementById("manage-participants-close");
+const manageParticipantsCancelButton = document.getElementById("manage-participants-cancel");
+const manageParticipantsConfirmButton = document.getElementById("manage-participants-confirm");
+const manageParticipantsSearchInput = document.getElementById("manage-participants-search");
+const manageParticipantsListElement = document.getElementById("manage-participants-list");
+const manageParticipantsEmptyElement = document.getElementById("manage-participants-empty");
 const callOverlayElement = document.getElementById("call-overlay");
 const callOverlayBackdrop = document.getElementById("call-overlay-backdrop");
 const callOverlayCloseButton = document.getElementById("call-overlay-close");
@@ -4720,6 +4731,7 @@ let activeChatId = null;
 let activeFilter = Filter.ALL;
 let settingsRestoreFocusTo = null;
 let profileRestoreFocusTo = null;
+let manageParticipantsRestoreFocusTo = null;
 let newContactRestoreFocusTo = null;
 let pendingAttachments = [];
 let activeAuthView = AuthView.LOGIN;
@@ -4732,6 +4744,7 @@ let contactLookupState = {
 };
 let chatMessagesShouldStickToBottom = true;
 let hasShownStorageQuotaWarning = false;
+let swipeTracking = null;
 
 function getActiveChat() {
   return chats.find((chat) => chat.id === activeChatId) ?? null;
@@ -5450,6 +5463,127 @@ function updateCallControls(chat) {
   }
 }
 
+function getSelfParticipantName() {
+  const profileName =
+    typeof activeProfile?.name === "string" && activeProfile.name.trim()
+      ? activeProfile.name.trim()
+      : "";
+  if (profileName) {
+    return profileName;
+  }
+
+  const authUsername =
+    typeof authState?.user?.username === "string" && authState.user.username.trim()
+      ? authState.user.username.trim()
+      : "";
+  if (authUsername) {
+    return authUsername;
+  }
+
+  return "You";
+}
+
+function getDirectChatParticipants(chat) {
+  const participants = [];
+  const selfName = getSelfParticipantName();
+  if (selfName) {
+    participants.push(selfName);
+  }
+
+  const normalizedContact = normalizeContact(chat?.contact);
+  const contactName = normalizedContact
+    ? normalizedContact.displayName || normalizedContact.name || normalizedContact.nickname || ""
+    : "";
+  const fallbackName = typeof chat?.name === "string" ? chat.name.trim() : "";
+  const resolvedContactName = contactName || fallbackName;
+  if (resolvedContactName) {
+    participants.push(resolvedContactName);
+  }
+
+  const seen = new Set();
+  return participants
+    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .filter((value) => {
+      if (!value) {
+        return false;
+      }
+      const key = value.toLowerCase();
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+}
+
+function getManageableParticipantNames(chat) {
+  if (!chat) {
+    return [];
+  }
+
+  if (chat.type === ChatType.GROUP) {
+    return normalizeGroupParticipants(chat.participants);
+  }
+
+  if (chat.type === ChatType.DIRECT) {
+    return normalizeGroupParticipants(getDirectChatParticipants(chat));
+  }
+
+  return [];
+}
+
+function renderChatParticipants(chat) {
+  if (!chatParticipantsElement) {
+    return;
+  }
+
+  chatParticipantsElement.innerHTML = "";
+
+  if (!chat) {
+    chatParticipantsElement.hidden = true;
+    chatParticipantsElement.setAttribute("aria-hidden", "true");
+    chatParticipantsElement.removeAttribute("aria-label");
+    return;
+  }
+
+  let participants = [];
+  if (chat.type === ChatType.GROUP) {
+    participants = normalizeGroupParticipants(chat.participants);
+  } else if (chat.type === ChatType.DIRECT) {
+    participants = getDirectChatParticipants(chat);
+  }
+
+  if (!participants.length) {
+    chatParticipantsElement.hidden = true;
+    chatParticipantsElement.setAttribute("aria-hidden", "true");
+    chatParticipantsElement.removeAttribute("aria-label");
+    return;
+  }
+
+  participants.forEach((name) => {
+    const participant = document.createElement("div");
+    participant.className = "chat__participant";
+
+    const avatar = document.createElement("span");
+    avatar.className = "chat__participant-avatar";
+    avatar.textContent = getInitials(name);
+
+    const label = document.createElement("span");
+    label.className = "chat__participant-name";
+    label.textContent = name;
+
+    participant.append(avatar, label);
+    chatParticipantsElement.appendChild(participant);
+  });
+
+  chatParticipantsElement.hidden = false;
+  chatParticipantsElement.setAttribute("aria-hidden", "false");
+  const countLabel = `${participants.length} participant${
+    participants.length === 1 ? "" : "s"
+  }`;
+  chatParticipantsElement.setAttribute("aria-label", countLabel);
+}
+
 function renderChatView(chat) {
   if (chatWallpaperButton) {
     const hasChat = Boolean(chat);
@@ -5463,6 +5597,7 @@ function renderChatView(chat) {
   }
 
   if (!chat) {
+    renderChatParticipants(null);
     if (exportChatButton) {
       exportChatButton.disabled = true;
       exportChatButton.setAttribute("aria-label", "Export conversation");
@@ -5480,6 +5615,15 @@ function renderChatView(chat) {
     resetVoiceRecorder();
     renderComposerAttachments();
     updateCallControls(null);
+    if (manageParticipantsButton) {
+      manageParticipantsButton.hidden = true;
+      manageParticipantsButton.disabled = true;
+    }
+    if (deleteChatButton) {
+      deleteChatButton.disabled = true;
+      deleteChatButton.setAttribute("aria-label", "Delete conversation");
+      deleteChatButton.setAttribute("title", "Delete conversation");
+    }
     if (isMessageSearchOpen) {
       isMessageSearchOpen = false;
       activeMessageSearchQuery = "";
@@ -5539,6 +5683,23 @@ function renderChatView(chat) {
   chatAvatarElement.textContent = chat.avatar ?? chat.name.slice(0, 1).toUpperCase();
 
   updateCallControls(chat);
+  renderChatParticipants(chat);
+
+  if (manageParticipantsButton) {
+    const hasChat = Boolean(chat);
+    manageParticipantsButton.hidden = !hasChat;
+    manageParticipantsButton.disabled = !hasChat;
+    const label = hasChat ? `Add participants to ${chat.name}` : "Add participants";
+    manageParticipantsButton.setAttribute("aria-label", label);
+    manageParticipantsButton.setAttribute("title", label);
+  }
+
+  if (deleteChatButton) {
+    deleteChatButton.disabled = false;
+    const label = `Delete conversation with ${chat.name}`;
+    deleteChatButton.setAttribute("aria-label", label);
+    deleteChatButton.setAttribute("title", label);
+  }
 
   toggleStarButton.setAttribute(
     "aria-pressed",
@@ -7455,6 +7616,347 @@ function renderNewChatContacts(query = newChatSearchInput?.value ?? "") {
   });
 }
 
+function renderManageParticipantsOptions(query = manageParticipantsSearchInput?.value ?? "") {
+  if (!manageParticipantsListElement) {
+    return;
+  }
+
+  const chat = getActiveChat();
+  const rawQuery = typeof query === "string" ? query.trim() : "";
+  const normalizedQuery = rawQuery.toLowerCase();
+  manageParticipantsListElement.innerHTML = "";
+
+  if (!chat) {
+    if (manageParticipantsEmptyElement) {
+      manageParticipantsEmptyElement.hidden = false;
+      const heading = manageParticipantsEmptyElement.querySelector("strong");
+      const copy = manageParticipantsEmptyElement.querySelector("p");
+      if (heading) {
+        heading.textContent = "Select a conversation";
+      }
+      if (copy) {
+        copy.textContent = "Choose a chat to invite additional participants.";
+      }
+    }
+    updateManageParticipantsConfirmState();
+    return;
+  }
+
+  const existingList = getManageableParticipantNames(chat);
+  const existingSet = new Set(existingList.map((name) => name.toLowerCase()));
+  const available = sortContacts(contacts);
+  const filteredContacts = normalizedQuery
+    ? available.filter((contact) => contactMatchesQuery(contact, normalizedQuery))
+    : available;
+
+  const seenParticipants = new Set();
+  const options = [];
+
+  filteredContacts.forEach((contact) => {
+    const normalized = normalizeContact(contact);
+    if (!normalized) {
+      return;
+    }
+    const displayName =
+      normalized.displayName ||
+      normalized.nickname ||
+      normalized.email ||
+      normalized.phoneDisplay ||
+      normalized.phone ||
+      "Contact";
+    const sanitizedName = normalizeGroupParticipants([displayName])[0];
+    if (!sanitizedName) {
+      return;
+    }
+    const sanitizedKey = sanitizedName.toLowerCase();
+    if (seenParticipants.has(sanitizedKey)) {
+      return;
+    }
+    seenParticipants.add(sanitizedKey);
+    options.push({
+      contact: normalized,
+      displayName,
+      sanitizedName,
+      sanitizedKey,
+      rawQuery,
+    });
+  });
+
+  if (!options.length) {
+    if (manageParticipantsEmptyElement) {
+      manageParticipantsEmptyElement.hidden = false;
+      const heading = manageParticipantsEmptyElement.querySelector("strong");
+      const copy = manageParticipantsEmptyElement.querySelector("p");
+      if (heading) {
+        heading.textContent = normalizedQuery ? "No matches found" : "No contacts available";
+      }
+      if (copy) {
+        copy.textContent = normalizedQuery
+          ? "Try searching with a different name or detail."
+          : "Add contacts to invite them to the chat.";
+      }
+    }
+    updateManageParticipantsConfirmState();
+    return;
+  }
+
+  if (manageParticipantsEmptyElement) {
+    manageParticipantsEmptyElement.hidden = true;
+  }
+
+  options.forEach(({ contact, displayName, sanitizedName, sanitizedKey, rawQuery: optionQuery }) => {
+    const listItem = document.createElement("li");
+    listItem.className = "new-chat__list-item";
+
+    const label = document.createElement("label");
+    label.className = "new-chat__contact new-chat__contact--selectable";
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.className = "manage-participants__checkbox";
+    checkbox.value = sanitizedName;
+    checkbox.dataset.participantName = sanitizedName;
+    checkbox.dataset.participantDisplayName = displayName;
+
+    const nameNode = document.createElement("span");
+    nameNode.className = "new-chat__contact-name";
+    nameNode.appendChild(createHighlightedFragment(displayName, optionQuery));
+
+    const metaNode = document.createElement("span");
+    metaNode.className = "new-chat__contact-meta";
+    const metaSource =
+      contact.email ||
+      contact.phoneDisplay ||
+      (contact.nickname && contact.nickname !== displayName ? contact.nickname : "") ||
+      getContactPreviewText(contact) ||
+      deriveContactStatus(contact);
+    if (existingSet.has(sanitizedKey)) {
+      checkbox.checked = true;
+      checkbox.disabled = true;
+      label.classList.add("new-chat__contact--existing");
+      metaNode.textContent = "Already in chat";
+    } else if (metaSource) {
+      metaNode.appendChild(createHighlightedFragment(metaSource, optionQuery));
+    } else {
+      metaNode.textContent = "Ready to invite";
+    }
+
+    const avatar = document.createElement("span");
+    avatar.className = "new-chat__contact-avatar";
+    const avatarSource =
+      displayName || contact.nickname || contact.email || contact.phoneDisplay || contact.phone || "?";
+    avatar.textContent = getInitials(avatarSource);
+
+    label.append(checkbox, avatar);
+
+    const details = document.createElement("span");
+    details.className = "new-chat__contact-details";
+    details.append(nameNode, metaNode);
+    label.appendChild(details);
+
+    checkbox.addEventListener("change", updateManageParticipantsConfirmState);
+
+    listItem.appendChild(label);
+    manageParticipantsListElement.appendChild(listItem);
+  });
+
+  updateManageParticipantsConfirmState();
+}
+
+function updateManageParticipantsConfirmState() {
+  if (!manageParticipantsConfirmButton) {
+    return;
+  }
+
+  const selected = manageParticipantsListElement
+    ? Array.from(
+        manageParticipantsListElement.querySelectorAll(
+          "input.manage-participants__checkbox:not([disabled]):checked"
+        )
+      )
+    : [];
+  const count = selected.length;
+  manageParticipantsConfirmButton.disabled = count === 0;
+  manageParticipantsConfirmButton.textContent =
+    count > 0 ? `Add ${count} participant${count === 1 ? "" : "s"}` : "Add participants";
+}
+
+function openManageParticipantsModal() {
+  if (!manageParticipantsModal || !manageParticipantsButton) {
+    return;
+  }
+
+  const chat = getActiveChat();
+  if (!chat) {
+    showToast("Select a conversation to add participants");
+    return;
+  }
+
+  if (!manageParticipantsModal.hidden) {
+    return;
+  }
+
+  manageParticipantsRestoreFocusTo =
+    document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  manageParticipantsModal.hidden = false;
+  document.body.classList.add("modal-open");
+  if (manageParticipantsSearchInput instanceof HTMLInputElement) {
+    manageParticipantsSearchInput.value = "";
+  }
+  renderManageParticipantsOptions("");
+  if (manageParticipantsSearchInput instanceof HTMLElement) {
+    manageParticipantsSearchInput.focus();
+  }
+}
+
+function closeManageParticipantsModal({ restoreFocus = true } = {}) {
+  if (!manageParticipantsModal || manageParticipantsModal.hidden) {
+    return;
+  }
+
+  manageParticipantsModal.hidden = true;
+  if (!document.querySelector(".modal:not([hidden])")) {
+    document.body.classList.remove("modal-open");
+  }
+  if (manageParticipantsSearchInput instanceof HTMLInputElement) {
+    manageParticipantsSearchInput.value = "";
+  }
+  manageParticipantsRestoreFocusTo = restoreFocus ? manageParticipantsRestoreFocusTo : null;
+  updateManageParticipantsConfirmState();
+
+  if (!restoreFocus) {
+    manageParticipantsRestoreFocusTo = null;
+    return;
+  }
+
+  const restoreTarget = manageParticipantsRestoreFocusTo;
+  manageParticipantsRestoreFocusTo = null;
+  if (restoreTarget instanceof HTMLElement) {
+    restoreTarget.focus();
+  } else if (manageParticipantsButton instanceof HTMLElement) {
+    manageParticipantsButton.focus();
+  }
+}
+
+function trapManageParticipantsFocus(event) {
+  if (!manageParticipantsModal || manageParticipantsModal.hidden) {
+    return;
+  }
+  if (event.key !== "Tab") {
+    return;
+  }
+
+  const focusableSelectors =
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  const focusable = Array.from(manageParticipantsModal.querySelectorAll(focusableSelectors)).filter(
+    (element) =>
+      element instanceof HTMLElement &&
+      !element.hasAttribute("data-close-modal") &&
+      element.offsetParent !== null
+  );
+
+  if (!focusable.length) {
+    return;
+  }
+
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+
+  if (event.shiftKey) {
+    if (document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    }
+  } else if (document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function handleManageParticipantsSearch(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement)) {
+    return;
+  }
+  renderManageParticipantsOptions(target.value ?? "");
+}
+
+function handleManageParticipantsConfirm() {
+  const chat = getActiveChat();
+  if (!chat) {
+    closeManageParticipantsModal();
+    return;
+  }
+
+  if (!manageParticipantsListElement) {
+    closeManageParticipantsModal();
+    return;
+  }
+
+  const selectedInputs = Array.from(
+    manageParticipantsListElement.querySelectorAll(
+      "input.manage-participants__checkbox:not([disabled]):checked"
+    )
+  );
+  if (!selectedInputs.length) {
+    showToast("Select contacts to add");
+    return;
+  }
+
+  const existingOrdered = getManageableParticipantNames(chat);
+  const existingSet = new Set(existingOrdered.map((name) => name.toLowerCase()));
+  const addedNames = [];
+
+  selectedInputs.forEach((input) => {
+    const name = input.dataset.participantName ?? input.value ?? "";
+    const normalized = normalizeGroupParticipants([name])[0];
+    const key = typeof normalized === "string" ? normalized.toLowerCase() : "";
+    if (!key || existingSet.has(key)) {
+      return;
+    }
+    existingSet.add(key);
+    addedNames.push(normalized);
+  });
+
+  if (!addedNames.length) {
+    closeManageParticipantsModal();
+    showToast("Everyone you selected is already in the chat");
+    return;
+  }
+
+  const updatedParticipants = normalizeGroupParticipants([
+    ...existingOrdered,
+    ...addedNames,
+  ]);
+
+  const wasGroup = chat.type === ChatType.GROUP;
+  chat.participants = updatedParticipants;
+  if (!wasGroup) {
+    // Promote direct conversations to groups once additional participants are added so
+    // future management reuses the shared group code paths.
+    chat.type = ChatType.GROUP;
+    if (chat.contact) {
+      delete chat.contact;
+    }
+    chat.capabilities = {
+      audio: chat.capabilities?.audio !== false,
+      video: chat.capabilities?.video !== false,
+      phone: false,
+    };
+  }
+  chat.status = deriveGroupStatus(chat.participants, chat.description);
+  saveState(chats);
+  renderChats(chatSearchInput.value);
+  renderChatView(chat);
+  closeManageParticipantsModal();
+
+  const count = addedNames.length;
+  const toastMessage = wasGroup
+    ? `Added ${count} participant${count === 1 ? "" : "s"}`
+    : `Created a group chat and added ${count} participant${count === 1 ? "" : "s"}`;
+  showToast(toastMessage);
+}
+
 function showNewChatView(view, { focus = true } = {}) {
   if (!newContactModal) return;
   const mode = view === "form" ? "form" : "list";
@@ -7790,6 +8292,46 @@ function toggleArchive() {
     renderChats(chatSearchInput.value);
   }
   showToast(willArchive ? "Conversation archived" : "Conversation restored");
+}
+
+function deleteActiveChat() {
+  const chat = getActiveChat();
+  if (!chat) {
+    showToast("Select a chat to delete");
+    return;
+  }
+
+  const displayName = getChatDisplayName(chat);
+  const confirmed = window.confirm(
+    `Delete the conversation with ${displayName}? This action cannot be undone.`
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  const index = chats.findIndex((candidate) => candidate.id === chat.id);
+  if (index === -1) {
+    return;
+  }
+
+  chats.splice(index, 1);
+  if (activeChatId === chat.id) {
+    activeChatId = null;
+  }
+
+  closeManageParticipantsModal({ restoreFocus: false });
+  saveState(chats);
+  pruneDrafts();
+  pruneAttachmentDrafts();
+  pendingAttachments = activeChatId ? getAttachmentDraft(activeChatId) : [];
+
+  renderChats(chatSearchInput.value);
+  renderChatView(getActiveChat());
+  if (window.innerWidth <= 900) {
+    showSidebar();
+  }
+
+  showToast(`Deleted ${displayName}`);
 }
 
 function autoResizeTextarea() {
@@ -8174,15 +8716,149 @@ function toggleEmojiPicker() {
 
 function showSidebar() {
   sidebarElement.classList.add("sidebar--visible");
+  swipeTracking = null;
 }
 
 function hideSidebar() {
   sidebarElement.classList.remove("sidebar--visible");
+  swipeTracking = null;
 }
 
 function maybeHideSidebar() {
   if (window.innerWidth > 900) return;
   hideSidebar();
+}
+
+function isSupportedSwipePointerType(pointerType) {
+  const normalized = typeof pointerType === "string" ? pointerType.toLowerCase() : "";
+  if (!normalized) {
+    return true;
+  }
+  return normalized === "touch" || normalized === "mouse" || normalized === "pen";
+}
+
+function isPrimarySwipePointer(event) {
+  if (!isSupportedSwipePointerType(event.pointerType)) {
+    return false;
+  }
+  if (event.isPrimary === false) {
+    return false;
+  }
+  if (typeof event.button === "number" && event.button > 0) {
+    return false;
+  }
+  return true;
+}
+
+function handleSidebarPointerDown(event) {
+  if (!sidebarElement || window.innerWidth > 900) {
+    return;
+  }
+  if (!isPrimarySwipePointer(event)) {
+    return;
+  }
+  if (!sidebarElement.classList.contains("sidebar--visible")) {
+    return;
+  }
+  swipeTracking = {
+    pointerId: event.pointerId,
+    pointerType: typeof event.pointerType === "string" ? event.pointerType.toLowerCase() : "",
+    target: "sidebar",
+    startX: event.clientX,
+    startY: event.clientY,
+    active: false,
+  };
+}
+
+function handleChatPointerDown(event) {
+  if (!chatElement || !sidebarElement || window.innerWidth > 900) {
+    return;
+  }
+  if (!isPrimarySwipePointer(event)) {
+    return;
+  }
+  if (sidebarElement.classList.contains("sidebar--visible")) {
+    return;
+  }
+  swipeTracking = {
+    pointerId: event.pointerId,
+    pointerType: typeof event.pointerType === "string" ? event.pointerType.toLowerCase() : "",
+    target: "chat",
+    startX: event.clientX,
+    startY: event.clientY,
+    active: false,
+  };
+}
+
+function handleSwipePointerMove(event) {
+  if (!swipeTracking || event.pointerId !== swipeTracking.pointerId) {
+    return;
+  }
+  if (!isSupportedSwipePointerType(swipeTracking.pointerType)) {
+    swipeTracking = null;
+    return;
+  }
+
+  if (
+    swipeTracking.pointerType === "mouse" &&
+    typeof event.buttons === "number" &&
+    event.buttons === 0
+  ) {
+    swipeTracking = null;
+    return;
+  }
+
+  const deltaX = event.clientX - swipeTracking.startX;
+  const deltaY = event.clientY - swipeTracking.startY;
+
+  if (!swipeTracking.active) {
+    if (Math.abs(deltaX) < 10 && Math.abs(deltaY) < 10) {
+      return;
+    }
+    if (Math.abs(deltaY) > Math.abs(deltaX)) {
+      swipeTracking = null;
+      return;
+    }
+    if (Math.abs(deltaX) >= 24) {
+      swipeTracking.active = true;
+    }
+  }
+
+  if (swipeTracking.active && event.cancelable) {
+    event.preventDefault();
+  }
+}
+
+function handleSwipePointerEnd(event) {
+  if (!swipeTracking || event.pointerId !== swipeTracking.pointerId) {
+    return;
+  }
+
+  if (swipeTracking.active) {
+    const deltaX = event.clientX - swipeTracking.startX;
+    if (swipeTracking.target === "sidebar" && deltaX < -60) {
+      hideSidebar();
+    } else if (swipeTracking.target === "chat" && deltaX > 60) {
+      showSidebar();
+    }
+  }
+
+  swipeTracking = null;
+}
+
+function cancelSwipeTracking() {
+  swipeTracking = null;
+}
+
+function setupSwipeGestures() {
+  if (!sidebarElement || !chatElement) {
+    return;
+  }
+  sidebarElement.addEventListener("pointerdown", handleSidebarPointerDown);
+  chatElement.addEventListener("pointerdown", handleChatPointerDown);
+  window.addEventListener("pointermove", handleSwipePointerMove, { passive: false });
+  window.addEventListener("pointerup", handleSwipePointerEnd);
+  window.addEventListener("pointercancel", cancelSwipeTracking);
 }
 
 function setupMobileHeader() {
@@ -8403,6 +9079,34 @@ function hydrate() {
   }
   toggleStarButton.addEventListener("click", toggleStar);
   toggleArchiveButton.addEventListener("click", toggleArchive);
+  if (deleteChatButton) {
+    deleteChatButton.addEventListener("click", deleteActiveChat);
+    deleteChatButton.disabled = true;
+  }
+  if (manageParticipantsButton) {
+    manageParticipantsButton.addEventListener("click", openManageParticipantsModal);
+  }
+  if (manageParticipantsSearchInput) {
+    manageParticipantsSearchInput.addEventListener("input", handleManageParticipantsSearch);
+  }
+  if (manageParticipantsConfirmButton) {
+    manageParticipantsConfirmButton.addEventListener("click", handleManageParticipantsConfirm);
+  }
+  if (manageParticipantsCloseButton) {
+    manageParticipantsCloseButton.addEventListener("click", () => closeManageParticipantsModal());
+  }
+  if (manageParticipantsCancelButton) {
+    manageParticipantsCancelButton.addEventListener("click", () => closeManageParticipantsModal());
+  }
+  if (manageParticipantsModal) {
+    manageParticipantsModal.addEventListener("click", (event) => {
+      const target = event.target;
+      if (target instanceof HTMLElement && target.hasAttribute("data-close-modal")) {
+        closeManageParticipantsModal();
+      }
+    });
+    manageParticipantsModal.addEventListener("keydown", trapManageParticipantsFocus);
+  }
   if (openMessageSearchButton) {
     openMessageSearchButton.addEventListener("click", () => {
       if (isMessageSearchOpen) {
@@ -8630,6 +9334,7 @@ function hydrate() {
 
   setupKeyboardShortcuts();
   setupMobileHeader();
+  setupSwipeGestures();
 
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") {
@@ -8700,6 +9405,12 @@ function hydrate() {
     if (callOverlayElement && !callOverlayElement.hidden) {
       event.preventDefault();
       endActiveCall({ reason: "Call ended" });
+      return;
+    }
+
+    if (manageParticipantsModal && !manageParticipantsModal.hidden) {
+      event.preventDefault();
+      closeManageParticipantsModal();
       return;
     }
 
