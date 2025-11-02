@@ -6,15 +6,11 @@ const { Server } = require('socket.io');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { Pool } = require('pg');
-const { TextDecoder } = require('util');
 
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'development-secret-change-me';
 const MAX_CHAT_HISTORY = 50;
 const MAX_ACTIVITY_LOG = 250;
-// Limit remote preview downloads so fetching metadata cannot exhaust memory or bandwidth.
-const MAX_LINK_PREVIEW_BYTES = 200 * 1024;
-const LINK_PREVIEW_TIMEOUT_MS = 4500;
 
 const VALID_WALLPAPERS = new Set(['grid', 'aurora', 'bloom', 'none']);
 
@@ -77,186 +73,6 @@ function logInMemoryFallback(reason) {
 
   if (trimmedReason) {
     console.warn(`⚠️  Continuing with in-memory data store due to: ${trimmedReason}`);
-  }
-}
-
-function normalizePreviewUrl(rawUrl) {
-  if (typeof rawUrl !== 'string') {
-    return null;
-  }
-  let normalized;
-  try {
-    normalized = new URL(rawUrl.trim());
-  } catch (_error) {
-    return null;
-  }
-  if (!['http:', 'https:'].includes(normalized.protocol)) {
-    return null;
-  }
-  return normalized.toString();
-}
-
-function decodeHtmlEntities(value) {
-  if (typeof value !== 'string') {
-    return '';
-  }
-  return value
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/&amp;/gi, '&')
-    .trim();
-}
-
-function parseMetaTagAttributes(tag) {
-  const attributes = {};
-  if (typeof tag !== 'string') {
-    return attributes;
-  }
-  const attributePattern = /(\w[\w-]*)\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'>]+))/gi;
-  let match = attributePattern.exec(tag);
-  while (match) {
-    const key = match[1].toLowerCase();
-    const rawValue = match[3] || match[4] || match[5] || '';
-    attributes[key] = decodeHtmlEntities(rawValue);
-    match = attributePattern.exec(tag);
-  }
-  return attributes;
-}
-
-function parseLinkPreviewMetadata(html, resolvedUrl) {
-  if (typeof html !== 'string' || !html) {
-    return null;
-  }
-
-  const urlObject = new URL(resolvedUrl);
-  const metaTagPattern = /<meta\s+[^>]*>/gi;
-  const metaEntries = [];
-  let match = metaTagPattern.exec(html);
-  while (match) {
-    const attributes = parseMetaTagAttributes(match[0]);
-    const key = attributes.property || attributes.name || '';
-    if (key) {
-      metaEntries.push({ key: key.toLowerCase(), content: attributes.content || '' });
-    }
-    match = metaTagPattern.exec(html);
-  }
-
-  const getMetaContent = (...keys) => {
-    for (const key of keys) {
-      const normalizedKey = key.toLowerCase();
-      const entry = metaEntries.find((candidate) => candidate.key === normalizedKey);
-      if (entry && entry.content) {
-        return entry.content;
-      }
-    }
-    return '';
-  };
-
-  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  const rawTitle = getMetaContent('og:title', 'twitter:title') || (titleMatch ? decodeHtmlEntities(titleMatch[1]) : '');
-  const rawDescription = getMetaContent('og:description', 'description', 'twitter:description');
-  const rawSiteName = getMetaContent('og:site_name', 'application-name', 'twitter:site');
-  const rawImage = getMetaContent('og:image', 'og:image:url', 'twitter:image', 'twitter:image:src');
-
-  const siteName = rawSiteName || urlObject.hostname;
-  let image = '';
-  if (rawImage) {
-    try {
-      image = new URL(rawImage, resolvedUrl).toString();
-    } catch (_error) {
-      image = '';
-    }
-  }
-
-  const preview = {
-    url: resolvedUrl,
-    title: rawTitle ? rawTitle.trim() : '',
-    description: rawDescription ? rawDescription.trim() : '',
-    siteName: siteName ? siteName.trim() : '',
-    image,
-  };
-
-  return preview;
-}
-
-async function readLimitedBody(response, byteLimit) {
-  if (!response || typeof response.text !== 'function') {
-    return '';
-  }
-
-  if (!response.body || typeof response.body.getReader !== 'function') {
-    // Older fetch implementations may not expose a readable stream; fall back to
-    // reading the entire response and trimming it to the allowed size.
-    const text = await response.text();
-    return typeof text === 'string' ? text.slice(0, byteLimit) : '';
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder('utf-8', { fatal: false });
-  let received = 0;
-  let result = '';
-
-  while (received < byteLimit) {
-    const { value, done } = await reader.read();
-    if (done) {
-      break;
-    }
-    if (value) {
-      received += value.byteLength;
-      result += decoder.decode(value, { stream: true });
-      if (received >= byteLimit) {
-        break;
-      }
-    }
-  }
-
-  result += decoder.decode();
-  reader.releaseLock();
-  return result.slice(0, byteLimit);
-}
-
-async function fetchLinkPreviewMetadata(rawUrl) {
-  const normalizedUrl = normalizePreviewUrl(rawUrl);
-  if (!normalizedUrl) {
-    return null;
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), LINK_PREVIEW_TIMEOUT_MS);
-
-  try {
-    const response = await fetch(normalizedUrl, {
-      redirect: 'follow',
-      signal: controller.signal,
-      headers: {
-        Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
-      },
-    });
-
-    if (!response.ok) {
-      return null;
-    }
-
-    const contentType = response.headers.get('content-type') || '';
-    if (!contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
-      return null;
-    }
-
-    const body = await readLimitedBody(response, MAX_LINK_PREVIEW_BYTES);
-    if (!body) {
-      return null;
-    }
-
-    return parseLinkPreviewMetadata(body, normalizedUrl);
-  } catch (error) {
-    if (error && error.name === 'AbortError') {
-      return null;
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
@@ -1599,27 +1415,6 @@ app.get('/api/users/search', async (req, res) => {
   } catch (error) {
     console.error('Error searching for users', error);
     res.status(500).json({ error: 'Failed to search users.' });
-  }
-});
-
-app.get('/api/link-preview', async (req, res) => {
-  const rawUrl = typeof req.query.url === 'string' ? req.query.url : '';
-  const normalizedUrl = normalizePreviewUrl(rawUrl);
-  if (!normalizedUrl) {
-    res.status(400).json({ error: 'Provide a valid http(s) URL to generate a preview.' });
-    return;
-  }
-
-  try {
-    const preview = await fetchLinkPreviewMetadata(normalizedUrl);
-    if (!preview) {
-      res.status(404).json({ error: 'Preview not available for the requested URL.' });
-      return;
-    }
-    res.json(preview);
-  } catch (error) {
-    console.error('Failed to build link preview', error);
-    res.status(502).json({ error: 'Unable to fetch link preview at this time.' });
   }
 });
 
