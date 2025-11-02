@@ -287,8 +287,15 @@
           <button class="icon-button" id="toggle-archive" aria-label="Archive conversation">
             📁
           </button>
+          <button class="icon-button" id="manage-participants" aria-label="Add participants" hidden>
+            👥
+          </button>
+          <button class="icon-button" id="delete-chat" aria-label="Delete conversation">
+            🗑️
+          </button>
         </div>
       </header>
+      <div class="chat__participants-bar" id="chat-participants" hidden aria-hidden="true"></div>
       <div class="chat__message-search" id="message-search" role="search" hidden aria-hidden="true">
         <div class="chat__message-search-input">
           <input
@@ -438,6 +445,67 @@
         </div>
       </footer>
     </main>
+  </div>
+
+  <div
+    class="modal"
+    id="manage-participants-modal"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="manage-participants-title"
+    hidden
+  >
+    <div class="modal__backdrop" data-close-modal></div>
+    <div class="modal__content" role="document">
+      <header class="modal__header modal__header--new-chat">
+        <h2 class="modal__title" id="manage-participants-title">Add participants</h2>
+        <button
+          class="icon-button modal__close"
+          id="manage-participants-close"
+          aria-label="Close add participants"
+        >
+          ✕
+        </button>
+      </header>
+      <div class="new-chat manage-participants" id="manage-participants-container">
+        <div class="new-chat__search">
+          <input
+            type="search"
+            id="manage-participants-search"
+            placeholder="Search contacts"
+            aria-label="Search contacts to add"
+            autocomplete="off"
+          />
+        </div>
+        <ul
+          class="new-chat__list"
+          id="manage-participants-list"
+          role="listbox"
+          aria-label="Contacts to add"
+        ></ul>
+        <div class="new-chat__empty" id="manage-participants-empty" hidden>
+          <strong>No contacts available</strong>
+          <p>Add contacts to invite more participants.</p>
+        </div>
+        <div class="manage-participants__actions">
+          <button
+            type="button"
+            class="new-contact__button new-contact__button--secondary"
+            id="manage-participants-cancel"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="new-contact__button new-contact__button--primary"
+            id="manage-participants-confirm"
+            disabled
+          >
+            Add participants
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <template id="chat-item-template">
