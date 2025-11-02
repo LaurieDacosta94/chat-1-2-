@@ -439,6 +439,9 @@ const realtimeState = {
   pendingReceipts: [],
 };
 
+const accountDirectory = new Map();
+const linkPreviewCache = new Map();
+
 let hasLoggedMissingSocketClient = false;
 let chatWallpaperOverrides = {};
 
@@ -1413,6 +1416,113 @@ function buildGroupTooltip(chat) {
   return `Participants: ${names.join(", ")}`;
 }
 
+function rememberAccountProfile(accountId, profile = {}) {
+  const normalizedId = normalizeAccountId(accountId);
+  if (!normalizedId) {
+    return;
+  }
+
+  const next = { ...(accountDirectory.get(normalizedId) ?? {}) };
+  const username =
+    typeof profile.username === "string" && profile.username.trim()
+      ? profile.username.trim()
+      : "";
+  const displayName =
+    typeof profile.displayName === "string" && profile.displayName.trim()
+      ? truncateText(profile.displayName.trim(), 80)
+      : "";
+
+  if (username) {
+    next.username = username;
+  }
+  if (displayName) {
+    next.displayName = displayName;
+  }
+
+  accountDirectory.set(normalizedId, next);
+}
+
+function getAccountDirectoryEntry(accountId) {
+  const normalizedId = normalizeAccountId(accountId);
+  if (!normalizedId) {
+    return null;
+  }
+  return accountDirectory.get(normalizedId) ?? null;
+}
+
+function formatUnknownAccountLabel(accountId) {
+  const normalizedId = normalizeAccountId(accountId);
+  if (!normalizedId) {
+    return "Unknown user";
+  }
+  return `User ${normalizedId}`;
+}
+
+function getAccountDisplayName(accountId) {
+  const normalizedId = normalizeAccountId(accountId);
+  if (!normalizedId) {
+    return "";
+  }
+  const contact = findContactByAccountId(normalizedId);
+  if (contact) {
+    return (
+      contact.displayName ||
+      contact.nickname ||
+      contact.username ||
+      contact.email ||
+      contact.phoneDisplay ||
+      contact.phone ||
+      formatUnknownAccountLabel(normalizedId)
+    );
+  }
+
+  const directoryEntry = getAccountDirectoryEntry(normalizedId);
+  if (directoryEntry) {
+    return (
+      directoryEntry.displayName ||
+      directoryEntry.username ||
+      formatUnknownAccountLabel(normalizedId)
+    );
+  }
+
+  return formatUnknownAccountLabel(normalizedId);
+}
+
+function findContactByDisplayName(name) {
+  if (typeof name !== "string") {
+    return null;
+  }
+  const normalizedName = name.trim().toLowerCase();
+  if (!normalizedName) {
+    return null;
+  }
+
+  for (const entry of contacts) {
+    const normalized = normalizeContact(entry);
+    if (!normalized) {
+      continue;
+    }
+    const candidates = [
+      normalized.displayName,
+      normalized.nickname,
+      normalized.username,
+      normalized.email,
+      normalized.phoneDisplay,
+      normalized.phone,
+    ];
+    if (
+      candidates.some(
+        (candidate) =>
+          typeof candidate === "string" && candidate.trim().toLowerCase() === normalizedName
+      )
+    ) {
+      return normalized;
+    }
+  }
+
+  return null;
+}
+
 function normalizePhoneNumber(value) {
   if (!value && value !== 0) return "";
   const text = String(value).trim();
@@ -1718,6 +1828,13 @@ function normalizeContact(contact) {
     normalized.id = normalized.lookupKey;
   } else {
     normalized.id = typeof crypto?.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+  }
+
+  if (normalized.accountId) {
+    rememberAccountProfile(normalized.accountId, {
+      username: normalized.username || normalized.nickname || "",
+      displayName: normalized.displayName || normalized.name || normalized.nickname || "",
+    });
   }
 
   return normalized;
@@ -2044,6 +2161,57 @@ function syncContactsFromChats() {
   renderNewChatContacts();
 }
 
+function normalizePreviewUrl(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+  try {
+    const url = new URL(value.trim());
+    if (!url.protocol || (url.protocol !== "http:" && url.protocol !== "https:")) {
+      return "";
+    }
+    return url.toString();
+  } catch (_error) {
+    return "";
+  }
+}
+
+function normalizeLinkPreview(preview) {
+  if (!preview || typeof preview !== "object") {
+    return null;
+  }
+
+  const normalizedUrl = normalizePreviewUrl(preview.url);
+  if (!normalizedUrl) {
+    return null;
+  }
+
+  const normalized = { url: normalizedUrl };
+
+  if (typeof preview.title === "string" && preview.title.trim()) {
+    normalized.title = truncateText(preview.title.trim(), 160);
+  }
+
+  if (typeof preview.description === "string" && preview.description.trim()) {
+    normalized.description = truncateText(preview.description.trim(), 260);
+  }
+
+  if (typeof preview.siteName === "string" && preview.siteName.trim()) {
+    normalized.siteName = truncateText(preview.siteName.trim(), 80);
+  }
+
+  if (typeof preview.image === "string" && preview.image.trim()) {
+    try {
+      const imageUrl = new URL(preview.image.trim(), normalizedUrl);
+      normalized.image = imageUrl.toString();
+    } catch (_error) {
+      // Ignore invalid preview images.
+    }
+  }
+
+  return normalized;
+}
+
 function normalizeMessage(message) {
   if (!message) return null;
 
@@ -2077,6 +2245,11 @@ function normalizeMessage(message) {
     ? normalized.attachments.map(normalizeAttachment).filter(Boolean)
     : [];
   normalized.attachments = normalizedAttachments;
+
+  const normalizedLinkPreviews = Array.isArray(message.linkPreviews)
+    ? message.linkPreviews.map(normalizeLinkPreview).filter(Boolean)
+    : [];
+  normalized.linkPreviews = normalizedLinkPreviews;
 
   return normalized;
 }
@@ -2284,6 +2457,191 @@ function formatMessagePreview(message) {
   }
   const body = parts.length ? parts.join(" · ") : summary || "Attachment";
   return `${prefix}${statusIcon}${body}`;
+}
+
+function extractLinksFromMessageText(text = "") {
+  if (typeof text !== "string") {
+    return [];
+  }
+  const urlPattern = /https?:\/\/[^\s<>()]+/gi;
+  const matches = text.match(urlPattern) ?? [];
+  const cleaned = matches
+    .map((candidate) => candidate.replace(/[)\],.?!]+$/g, ""))
+    .map((candidate) => normalizePreviewUrl(candidate))
+    .filter(Boolean);
+  const seen = new Set();
+  return cleaned.filter((url) => {
+    const key = url.toLowerCase();
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function formatPreviewDisplayUrl(url) {
+  try {
+    const parsed = new URL(url);
+    const pathname = parsed.pathname && parsed.pathname !== "/" ? parsed.pathname : "";
+    return `${parsed.hostname}${pathname}`;
+  } catch (_error) {
+    return url;
+  }
+}
+
+function fetchLinkPreview(url) {
+  const normalizedUrl = normalizePreviewUrl(url);
+  if (!normalizedUrl) {
+    return Promise.resolve(null);
+  }
+
+  const cached = linkPreviewCache.get(normalizedUrl);
+  if (cached instanceof Promise) {
+    return cached;
+  }
+  if (cached === null) {
+    return Promise.resolve(null);
+  }
+  if (cached) {
+    return Promise.resolve(cached);
+  }
+
+  const request = (async () => {
+    try {
+      const payload = await apiRequest(
+        `/api/link-preview?url=${encodeURIComponent(normalizedUrl)}`,
+        { includeAuth: Boolean(authState?.token) }
+      );
+      const normalized = normalizeLinkPreview({ ...payload, url: normalizedUrl });
+      if (normalized) {
+        linkPreviewCache.set(normalizedUrl, normalized);
+        return normalized;
+      }
+      linkPreviewCache.set(normalizedUrl, null);
+      return null;
+    } catch (error) {
+      console.warn(`Failed to load link preview for ${normalizedUrl}`, error);
+      linkPreviewCache.set(normalizedUrl, null);
+      return null;
+    }
+  })();
+
+  linkPreviewCache.set(normalizedUrl, request);
+  return request;
+}
+
+function ensureLinkPreviewsForMessage(chat, message) {
+  if (!chat || !message) {
+    return;
+  }
+
+  const urls = extractLinksFromMessageText(message.text ?? "");
+  if (!urls.length) {
+    if (Array.isArray(message.linkPreviews) && message.linkPreviews.length) {
+      message.linkPreviews = [];
+    }
+    return;
+  }
+
+  const currentPreviews = Array.isArray(message.linkPreviews)
+    ? message.linkPreviews.filter((preview) => urls.includes(preview.url))
+    : [];
+  if (currentPreviews.length !== (message.linkPreviews?.length ?? 0)) {
+    message.linkPreviews = currentPreviews;
+  }
+
+  urls.forEach((url) => {
+    if (currentPreviews.some((preview) => preview.url === url)) {
+      return;
+    }
+    fetchLinkPreview(url)
+      .then((preview) => {
+        if (!preview) {
+          return;
+        }
+        const targetChat = chats.find((candidate) => candidate.id === chat.id);
+        if (!targetChat) {
+          return;
+        }
+        const targetMessage = targetChat.messages.find((candidate) => candidate.id === message.id);
+        if (!targetMessage) {
+          return;
+        }
+        const existing = Array.isArray(targetMessage.linkPreviews)
+          ? targetMessage.linkPreviews
+          : [];
+        if (existing.some((entry) => entry.url === preview.url)) {
+          return;
+        }
+        targetMessage.linkPreviews = [...existing, preview];
+        saveState(chats);
+        if (activeChatId === targetChat.id) {
+          renderChatView(targetChat);
+        }
+      })
+      .catch((error) => {
+        console.warn("Link preview fetch failed", error);
+      });
+  });
+}
+
+function createLinkPreviewElement(preview) {
+  const normalized = normalizeLinkPreview(preview);
+  if (!normalized) {
+    return null;
+  }
+
+  const anchor = document.createElement("a");
+  anchor.className = "link-preview";
+  anchor.href = normalized.url;
+  anchor.target = "_blank";
+  anchor.rel = "noopener noreferrer";
+
+  const titleText = normalized.title || normalized.siteName || normalized.url;
+  anchor.setAttribute("aria-label", `Open link ${titleText}`);
+
+  if (normalized.image) {
+    const thumbnail = document.createElement("div");
+    thumbnail.className = "link-preview__thumbnail";
+    const image = document.createElement("img");
+    image.src = normalized.image;
+    image.alt = titleText;
+    thumbnail.appendChild(image);
+    anchor.appendChild(thumbnail);
+  } else {
+    anchor.classList.add("link-preview--no-thumbnail");
+  }
+
+  const content = document.createElement("div");
+  content.className = "link-preview__content";
+
+  if (normalized.siteName && normalized.siteName !== titleText) {
+    const site = document.createElement("span");
+    site.className = "link-preview__site";
+    site.textContent = normalized.siteName;
+    content.appendChild(site);
+  }
+
+  const title = document.createElement("div");
+  title.className = "link-preview__title";
+  title.textContent = titleText;
+  content.appendChild(title);
+
+  if (normalized.description) {
+    const description = document.createElement("p");
+    description.className = "link-preview__description";
+    description.textContent = normalized.description;
+    content.appendChild(description);
+  }
+
+  const urlNode = document.createElement("span");
+  urlNode.className = "link-preview__url";
+  urlNode.textContent = formatPreviewDisplayUrl(normalized.url);
+  content.appendChild(urlNode);
+
+  anchor.appendChild(content);
+  return anchor;
 }
 
 function getMessageTimeValue(message) {
@@ -3616,6 +3974,17 @@ function buildLocalMessageFromServer(chatId, payload) {
   const direction = senderId !== null && authState?.user?.id === senderId ? "outgoing" : "incoming";
   const readBy = normalizeReadReceiptList(payload.read_by);
 
+  if (senderId !== null) {
+    const senderUsername =
+      typeof payload.sender_username === "string" && payload.sender_username.trim()
+        ? payload.sender_username.trim()
+        : "";
+    rememberAccountProfile(senderId, {
+      username: senderUsername,
+      displayName: senderUsername,
+    });
+  }
+
   const message = {
     id:
       typeof payload.client_id === "string" && payload.client_id
@@ -3670,6 +4039,13 @@ function bootstrapChatFromServerPayload(chatId, serverPayloads) {
     typeof referencePayload?.sender_username === "string" && referencePayload.sender_username.trim()
       ? referencePayload.sender_username.trim()
       : "";
+
+  if (senderAccountId) {
+    rememberAccountProfile(senderAccountId, {
+      username: senderUsername,
+      displayName: senderUsername,
+    });
+  }
 
   if (contactDetails) {
     if (!contactDetails.displayName && senderUsername) {
@@ -3730,6 +4106,14 @@ function applyIncomingContactMetadata(chat, payload) {
   const existingContact = normalizeContact(chat.contact);
   const nextContact = existingContact ? { ...existingContact } : {};
   let mutated = false;
+
+  if (senderAccountId) {
+    rememberAccountProfile(senderAccountId, {
+      username: senderUsername,
+      displayName:
+        nextContact.displayName || nextContact.nickname || senderUsername || chat.name || "",
+    });
+  }
 
   if (senderAccountId && nextContact.accountId !== senderAccountId) {
     nextContact.accountId = senderAccountId;
@@ -3793,6 +4177,9 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false, 
 
   const payloads = Array.isArray(serverPayloads) ? serverPayloads : [];
   payloads.forEach((payload) => {
+    if (updateGroupRosterFromPayload(chat, payload)) {
+      mutated = true;
+    }
     const contactMutated = applyIncomingContactMetadata(chat, payload);
     if (contactMutated) {
       mutated = true;
@@ -3823,6 +4210,7 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false, 
         if (normalizedMessage.clientId) {
           realtimeState.pendingOutgoing.delete(normalizedMessage.clientId);
         }
+        ensureLinkPreviewsForMessage(chat, existing);
         mutated = true;
         return;
       }
@@ -3850,6 +4238,7 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false, 
             serverMessageIds.add(normalizedMessage.serverId);
           }
           realtimeState.pendingOutgoing.delete(normalizedMessage.clientId);
+          ensureLinkPreviewsForMessage(chat, existing);
           mutated = true;
           if (isRealtime && normalizedMessage.direction === "outgoing") {
             const chatName = getChatDisplayName(chat);
@@ -3875,6 +4264,7 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false, 
     };
     applyReadReceiptsToMessage(chat, messageToInsert, normalizedMessage.readBy);
     chat.messages.push(messageToInsert);
+    ensureLinkPreviewsForMessage(chat, messageToInsert);
     if (normalizedMessage.serverId && serverMessageIds) {
       serverMessageIds.add(normalizedMessage.serverId);
     }
@@ -5594,6 +5984,226 @@ function getManageableParticipantNames(chat) {
   return [];
 }
 
+function updateGroupRosterFromPayload(chat, payload) {
+  if (!chat || chat.type !== ChatType.GROUP) {
+    return false;
+  }
+
+  const accountId = normalizeAccountId(payload?.sender_id);
+  const senderUsername =
+    typeof payload?.sender_username === "string" && payload.sender_username.trim()
+      ? payload.sender_username.trim()
+      : "";
+  let mutated = false;
+
+  if (accountId) {
+    rememberAccountProfile(accountId, {
+      username: senderUsername,
+      displayName: senderUsername,
+    });
+  }
+
+  const normalizedParticipants = normalizeGroupParticipants(chat.participants);
+  const participantSet = new Set(normalizedParticipants.map((name) => name.toLowerCase()));
+  const fallbackName = senderUsername || (accountId ? getAccountDisplayName(accountId) : "");
+  const normalizedName = normalizeGroupParticipants([fallbackName])[0];
+
+  if (normalizedName && !participantSet.has(normalizedName.toLowerCase())) {
+    chat.participants = [...normalizedParticipants, normalizedName];
+    mutated = true;
+  }
+
+  if (accountId) {
+    const participantAccountIds = new Set(normalizeParticipantAccountIds(chat.participantAccountIds));
+    if (!participantAccountIds.has(accountId)) {
+      participantAccountIds.add(accountId);
+      chat.participantAccountIds = Array.from(participantAccountIds);
+      mutated = true;
+    }
+  }
+
+  return mutated;
+}
+
+function buildChatParticipantEntries(chat) {
+  if (!chat) {
+    return [];
+  }
+
+  const entries = [];
+  const entriesByAccountId = new Map();
+  const entriesByName = new Map();
+
+  const ensureEntryLabel = (entry, label) => {
+    if (!label) return;
+    const defaultLabel = entry.accountId ? formatUnknownAccountLabel(entry.accountId) : "";
+    if (!entry.label || entry.label === defaultLabel) {
+      entry.label = label;
+    }
+  };
+
+  const addOrUpdateEntry = ({ label, accountId, username }) => {
+    let normalizedAccountId = normalizeAccountId(accountId);
+    let displayLabel = typeof label === "string" ? label.trim() : "";
+    let contact = normalizedAccountId ? findContactByAccountId(normalizedAccountId) : null;
+
+    if (!normalizedAccountId && !contact && displayLabel) {
+      contact = findContactByDisplayName(displayLabel);
+    }
+    if (!normalizedAccountId && contact?.accountId) {
+      normalizedAccountId = normalizeAccountId(contact.accountId);
+    }
+
+    if (normalizedAccountId && !displayLabel) {
+      displayLabel = getAccountDisplayName(normalizedAccountId);
+    }
+    if (!displayLabel && normalizedAccountId) {
+      displayLabel = formatUnknownAccountLabel(normalizedAccountId);
+    }
+    if (!displayLabel) {
+      return;
+    }
+
+    const keyName = displayLabel.toLowerCase();
+    const directoryEntry = normalizedAccountId ? getAccountDirectoryEntry(normalizedAccountId) : null;
+    const resolvedUsername =
+      username || directoryEntry?.username || contact?.username || "";
+
+    if (normalizedAccountId && entriesByAccountId.has(normalizedAccountId)) {
+      const entry = entriesByAccountId.get(normalizedAccountId);
+      ensureEntryLabel(entry, displayLabel);
+      if (!entry.contact && contact) {
+        entry.contact = contact;
+      }
+      if (!entry.username && resolvedUsername) {
+        entry.username = resolvedUsername;
+      }
+      entry.isSelf =
+        entry.isSelf || normalizeAccountId(authState?.user?.id) === normalizedAccountId;
+      return;
+    }
+
+    if (normalizedAccountId && entriesByName.has(keyName)) {
+      const entry = entriesByName.get(keyName);
+      if (!entry.accountId) {
+        entry.accountId = normalizedAccountId;
+        entriesByAccountId.set(normalizedAccountId, entry);
+      }
+      ensureEntryLabel(entry, displayLabel);
+      if (!entry.contact && contact) {
+        entry.contact = contact;
+      }
+      if (!entry.username && resolvedUsername) {
+        entry.username = resolvedUsername;
+      }
+      entry.isSelf =
+        entry.isSelf || normalizeAccountId(authState?.user?.id) === normalizedAccountId;
+      return;
+    }
+
+    if (!normalizedAccountId && entriesByName.has(keyName)) {
+      const entry = entriesByName.get(keyName);
+      ensureEntryLabel(entry, displayLabel);
+      if (!entry.contact && contact) {
+        entry.contact = contact;
+      }
+      if (!entry.username && resolvedUsername) {
+        entry.username = resolvedUsername;
+      }
+      entry.isSelf = entry.isSelf || entry.label === getSelfParticipantName();
+      return;
+    }
+
+    const entry = {
+      label: displayLabel,
+      accountId: normalizedAccountId ?? null,
+      contact: contact ?? null,
+      isSelf: normalizedAccountId
+        ? normalizeAccountId(authState?.user?.id) === normalizedAccountId
+        : displayLabel === getSelfParticipantName(),
+      username: resolvedUsername,
+    };
+    entries.push(entry);
+    entriesByName.set(keyName, entry);
+    if (normalizedAccountId) {
+      entriesByAccountId.set(normalizedAccountId, entry);
+    }
+  };
+
+  if (chat.type === ChatType.GROUP) {
+    normalizeGroupParticipants(chat.participants).forEach((name) => {
+      addOrUpdateEntry({ label: name });
+    });
+    normalizeParticipantAccountIds(chat.participantAccountIds).forEach((accountId) => {
+      addOrUpdateEntry({ accountId, label: getAccountDisplayName(accountId) });
+    });
+  } else if (chat.type === ChatType.DIRECT) {
+    getDirectChatParticipants(chat).forEach((name) => {
+      const contact = findContactByDisplayName(name);
+      addOrUpdateEntry({
+        label: name,
+        accountId: contact?.accountId ?? null,
+        username: contact?.username ?? contact?.nickname ?? "",
+      });
+    });
+  }
+
+  return entries;
+}
+
+function handleParticipantAddToContacts(entry) {
+  if (!entry || entry.contact || entry.isSelf) {
+    return;
+  }
+
+  const baseNickname = entry.username || entry.label || "";
+  const sanitizedNickname = baseNickname
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, "")
+    .slice(0, 80);
+  const fallbackNickname = entry.label.replace(/\s+/g, "").toLowerCase().slice(0, 80);
+  const nickname = sanitizedNickname || fallbackNickname || entry.label;
+
+  const contactPayload = {
+    method: ContactMethod.NICKNAME,
+    nickname,
+    displayName: entry.label,
+  };
+
+  if (entry.accountId) {
+    contactPayload.accountId = entry.accountId;
+    contactPayload.lookupKey = `account:${entry.accountId}`;
+  }
+  if (entry.username) {
+    contactPayload.username = entry.username;
+  }
+
+  const { contact: storedContact, added } = upsertContact(contactPayload);
+  const accountId = storedContact?.accountId || entry.accountId || null;
+
+  if (accountId) {
+    rememberAccountProfile(accountId, {
+      username: storedContact?.username || storedContact?.nickname || entry.username || "",
+      displayName: storedContact?.displayName || entry.label,
+    });
+  }
+
+  if (storedContact) {
+    showToast(
+      added
+        ? `Added ${storedContact.displayName || entry.label} to contacts`
+        : `${storedContact.displayName || entry.label} is already saved to contacts`
+    );
+  } else {
+    showToast(added ? `Added ${entry.label} to contacts` : `${entry.label} is already saved to contacts`);
+  }
+
+  const activeChat = getActiveChat();
+  if (activeChat) {
+    renderChatParticipants(activeChat);
+  }
+}
+
 function renderChatParticipants(chat) {
   if (!chatParticipantsElement) {
     return;
@@ -5608,31 +6218,51 @@ function renderChatParticipants(chat) {
     return;
   }
 
-  let participants = [];
-  if (chat.type === ChatType.GROUP) {
-    participants = normalizeGroupParticipants(chat.participants);
-  } else if (chat.type === ChatType.DIRECT) {
-    participants = getDirectChatParticipants(chat);
-  }
-
-  if (!participants.length) {
+  const entries = buildChatParticipantEntries(chat);
+  if (!entries.length || (chat.type === ChatType.DIRECT && entries.length <= 2)) {
     chatParticipantsElement.hidden = true;
     chatParticipantsElement.setAttribute("aria-hidden", "true");
     chatParticipantsElement.removeAttribute("aria-label");
     return;
   }
 
-  participants.forEach((name) => {
+  entries.forEach((entry) => {
     const participant = document.createElement("div");
     participant.className = "chat__participant";
 
     const avatar = document.createElement("span");
     avatar.className = "chat__participant-avatar";
-    avatar.textContent = getInitials(name);
+    avatar.textContent = getInitials(entry.label);
 
     const label = document.createElement("span");
     label.className = "chat__participant-name";
-    label.textContent = name;
+    label.textContent = entry.label;
+
+    const tooltipParts = [];
+    if (entry.contact) {
+      tooltipParts.push("Saved contact");
+    }
+    if (entry.username) {
+      tooltipParts.push(`@${entry.username}`);
+    }
+    const tooltip = tooltipParts.length ? `${entry.label} • ${tooltipParts.join(" • ")}` : entry.label;
+    participant.title = tooltip;
+
+    if (!entry.contact && !entry.isSelf) {
+      participant.classList.add("chat__participant--action");
+      participant.setAttribute("role", "button");
+      participant.setAttribute("tabindex", "0");
+      participant.setAttribute("aria-label", `Add ${entry.label} to contacts`);
+      participant.addEventListener("click", () => handleParticipantAddToContacts(entry));
+      participant.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          handleParticipantAddToContacts(entry);
+        }
+      });
+    } else {
+      participant.setAttribute("aria-label", tooltip);
+    }
 
     participant.append(avatar, label);
     chatParticipantsElement.appendChild(participant);
@@ -5640,8 +6270,8 @@ function renderChatParticipants(chat) {
 
   chatParticipantsElement.hidden = false;
   chatParticipantsElement.setAttribute("aria-hidden", "false");
-  const countLabel = `${participants.length} participant${
-    participants.length === 1 ? "" : "s"
+  const countLabel = `${entries.length} participant${
+    entries.length === 1 ? "" : "s"
   }`;
   chatParticipantsElement.setAttribute("aria-label", countLabel);
 }
@@ -5792,10 +6422,13 @@ function renderChatView(chat) {
     const timeNode = messageNode.querySelector(".message__time");
     const statusNode = messageNode.querySelector(".message__status");
     const attachmentsContainer = messageNode.querySelector(".message__attachments");
+    const linkPreviewContainer = messageNode.querySelector(".message__link-previews");
 
     const messageText = typeof message.text === "string" ? message.text : "";
     const messageTextLower = messageText.toLowerCase();
     const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+    ensureLinkPreviewsForMessage(chat, message);
+    const linkPreviews = Array.isArray(message.linkPreviews) ? message.linkPreviews : [];
     const formattedTime = formatMessageTimestamp(message);
     const highlightFragment = createHighlightedFragment(
       messageText,
@@ -5856,6 +6489,19 @@ function renderChatView(chat) {
       }
     }
 
+    if (linkPreviewContainer) {
+      linkPreviewContainer.innerHTML = "";
+      const previewElements = linkPreviews.map(createLinkPreviewElement).filter(Boolean);
+      if (previewElements.length) {
+        linkPreviewContainer.hidden = false;
+        linkPreviewContainer.setAttribute("aria-hidden", "false");
+        previewElements.forEach((element) => linkPreviewContainer.appendChild(element));
+      } else {
+        linkPreviewContainer.hidden = true;
+        linkPreviewContainer.setAttribute("aria-hidden", "true");
+      }
+    }
+
     if (timeNode) {
       timeNode.textContent = formattedTime;
       if (message.sentAt) {
@@ -5871,6 +6517,11 @@ function renderChatView(chat) {
         attachments.length === 1
           ? getAttachmentLabel(attachments[0])
           : `${attachments.length} attachments`
+      );
+    }
+    if (linkPreviews.length) {
+      accessibleParts.push(
+        linkPreviews.length === 1 ? "Link preview" : `${linkPreviews.length} link previews`
       );
     }
     if (formattedTime) {
@@ -5984,6 +6635,7 @@ function addMessageToChat(chatId, text, direction = "outgoing", attachments = []
     newMessage.senderId = authState.user.id;
   }
   chat.messages.push(newMessage);
+  ensureLinkPreviewsForMessage(chat, newMessage);
   chat.messages.sort((a, b) => getMessageTimeValue(a) - getMessageTimeValue(b));
 
   const wasArchived = chat.isArchived;
