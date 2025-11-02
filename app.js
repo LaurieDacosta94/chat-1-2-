@@ -8,6 +8,7 @@ const chatElement = document.getElementById("chat");
 const chatNameElement = document.getElementById("chat-name");
 const chatStatusElement = document.getElementById("chat-status");
 const chatAvatarElement = document.getElementById("chat-avatar");
+const chatContactElement = document.getElementById("chat-contact");
 const messageInput = document.getElementById("message-input");
 const sendButton = document.getElementById("send-button");
 const exportChatButton = document.getElementById("export-chat");
@@ -6201,6 +6202,7 @@ function handleParticipantAddToContacts(entry) {
   const activeChat = getActiveChat();
   if (activeChat) {
     renderChatParticipants(activeChat);
+    updateChatContactButton(activeChat);
   }
 }
 
@@ -6232,27 +6234,56 @@ function renderChatParticipants(chat) {
 
     const avatar = document.createElement("span");
     avatar.className = "chat__participant-avatar";
-    avatar.textContent = getInitials(entry.label);
+    const username = typeof entry.username === "string" ? entry.username.trim() : "";
+    const labelCandidate = typeof entry.label === "string" ? entry.label.trim() : "";
+    const baseLabel = labelCandidate || (username ? `@${username}` : "Unknown participant");
+    avatar.textContent = getInitials(baseLabel);
+
+    const text = document.createElement("span");
+    text.className = "chat__participant-text";
 
     const label = document.createElement("span");
     label.className = "chat__participant-name";
-    label.textContent = entry.label;
+    label.textContent = baseLabel;
+    text.appendChild(label);
+
+    const normalizedLabel = baseLabel.toLowerCase();
+    const normalizedUsername = username.toLowerCase();
+    const shouldShowUsername = Boolean(
+      username &&
+        normalizedUsername &&
+        normalizedLabel !== normalizedUsername &&
+        normalizedLabel !== `@${normalizedUsername}`
+    );
+
+    if (shouldShowUsername) {
+      const usernameNode = document.createElement("span");
+      usernameNode.className = "chat__participant-username";
+      usernameNode.textContent = `@${username}`;
+      text.appendChild(usernameNode);
+    }
 
     const tooltipParts = [];
     if (entry.contact) {
       tooltipParts.push("Saved contact");
     }
-    if (entry.username) {
-      tooltipParts.push(`@${entry.username}`);
+    if (username) {
+      tooltipParts.push(`@${username}`);
     }
-    const tooltip = tooltipParts.length ? `${entry.label} • ${tooltipParts.join(" • ")}` : entry.label;
+    const tooltip = tooltipParts.length ? `${baseLabel} • ${tooltipParts.join(" • ")}` : baseLabel;
     participant.title = tooltip;
+
+    const accessibleLabelParts = [baseLabel];
+    if (shouldShowUsername) {
+      accessibleLabelParts.push(`(@${username})`);
+    }
+    const accessibleLabel = accessibleLabelParts.join(" ");
 
     if (!entry.contact && !entry.isSelf) {
       participant.classList.add("chat__participant--action");
       participant.setAttribute("role", "button");
       participant.setAttribute("tabindex", "0");
-      participant.setAttribute("aria-label", `Add ${entry.label} to contacts`);
+      participant.setAttribute("aria-label", `Add ${accessibleLabel} to contacts`);
       participant.addEventListener("click", () => handleParticipantAddToContacts(entry));
       participant.addEventListener("keydown", (event) => {
         if (event.key === "Enter" || event.key === " ") {
@@ -6261,10 +6292,10 @@ function renderChatParticipants(chat) {
         }
       });
     } else {
-      participant.setAttribute("aria-label", tooltip);
+      participant.setAttribute("aria-label", accessibleLabel);
     }
 
-    participant.append(avatar, label);
+    participant.append(avatar, text);
     chatParticipantsElement.appendChild(participant);
   });
 
@@ -6274,6 +6305,103 @@ function renderChatParticipants(chat) {
     entries.length === 1 ? "" : "s"
   }`;
   chatParticipantsElement.setAttribute("aria-label", countLabel);
+}
+
+function getPrimaryParticipantEntryForChat(chat) {
+  if (!chat) {
+    return null;
+  }
+
+  const entries = buildChatParticipantEntries(chat);
+  if (!Array.isArray(entries) || !entries.length) {
+    return null;
+  }
+
+  return entries.find((entry) => !entry.isSelf) ?? null;
+}
+
+function updateChatContactButton(chat) {
+  if (!chatContactElement) {
+    return;
+  }
+
+  if (!chat) {
+    chatContactElement.disabled = true;
+    chatContactElement.dataset.action = "";
+    chatContactElement.setAttribute("aria-label", "Chat details");
+    chatContactElement.setAttribute("title", "Chat details");
+    return;
+  }
+
+  chatContactElement.disabled = false;
+
+  if (chat.type === ChatType.GROUP) {
+    const label = `View details for ${chat.name}`;
+    chatContactElement.dataset.action = "group";
+    chatContactElement.setAttribute("aria-label", label);
+    chatContactElement.setAttribute("title", label);
+    return;
+  }
+
+  const entry = getPrimaryParticipantEntryForChat(chat);
+  if (entry && !entry.contact && !entry.isSelf) {
+    const username = entry.username ? entry.username.trim() : "";
+    const entryLabel = entry.label && entry.label.trim() ? entry.label.trim() : username ? `@${username}` : "participant";
+    const labelSuffix = username ? ` (@${username})` : "";
+    const label = `Add ${entryLabel}${labelSuffix} to contacts`;
+    chatContactElement.dataset.action = "add";
+    chatContactElement.setAttribute("aria-label", label);
+    chatContactElement.setAttribute("title", label);
+    return;
+  }
+
+  const entryLabel = entry && entry.label && entry.label.trim()
+    ? entry.label.trim()
+    : entry && entry.username
+    ? `@${entry.username.trim()}`
+    : chat.name;
+  const label = `View contact ${entryLabel}`;
+  chatContactElement.dataset.action = "direct";
+  chatContactElement.setAttribute("aria-label", label);
+  chatContactElement.setAttribute("title", label);
+}
+
+function handleChatContactClick() {
+  const chat = getActiveChat();
+  if (!chat || !chatContactElement) {
+    return;
+  }
+
+  const action = chatContactElement.dataset.action || "";
+
+  if (action === "add") {
+    const entry = getPrimaryParticipantEntryForChat(chat);
+    if (entry && !entry.contact && !entry.isSelf) {
+      handleParticipantAddToContacts(entry);
+      updateChatContactButton(chat);
+    }
+    return;
+  }
+
+  if (action === "direct") {
+    const entry = getPrimaryParticipantEntryForChat(chat);
+    if (entry && entry.contact) {
+      const label = entry.contact.displayName || entry.label || "This contact";
+      showToast(`${label} is already in your contacts`);
+    }
+    return;
+  }
+
+  if (action === "group") {
+    if (manageParticipantsButton && !manageParticipantsButton.disabled) {
+      manageParticipantsButton.focus();
+      manageParticipantsButton.click();
+      return;
+    }
+    if (chatParticipantsElement && !chatParticipantsElement.hidden) {
+      chatParticipantsElement.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "start" });
+    }
+  }
 }
 
 function renderChatView(chat) {
@@ -6290,6 +6418,7 @@ function renderChatView(chat) {
 
   if (!chat) {
     renderChatParticipants(null);
+    updateChatContactButton(null);
     if (exportChatButton) {
       exportChatButton.disabled = true;
       exportChatButton.setAttribute("aria-label", "Export conversation");
@@ -6376,6 +6505,7 @@ function renderChatView(chat) {
 
   updateCallControls(chat);
   renderChatParticipants(chat);
+  updateChatContactButton(chat);
 
   if (manageParticipantsButton) {
     const hasChat = Boolean(chat);
@@ -9786,6 +9916,9 @@ function hydrate() {
   sendButton.addEventListener("click", handleSend);
   messageInput.addEventListener("input", handleMessageInput);
   messageInput.addEventListener("focus", () => closeEmojiPicker());
+  if (chatContactElement) {
+    chatContactElement.addEventListener("click", handleChatContactClick);
+  }
   if (attachmentButton && attachmentInput) {
     attachmentButton.addEventListener("click", () => {
       const chat = getActiveChat();
