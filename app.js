@@ -1357,6 +1357,26 @@ function normalizeGroupParticipants(participants = []) {
     .map((name) => truncateText(name, 60));
 }
 
+function normalizeParticipantAccountIds(accountIds = []) {
+  const normalized = [];
+  const seen = new Set();
+
+  accountIds.forEach((value) => {
+    const accountId = normalizeAccountId(value);
+    if (!accountId) {
+      return;
+    }
+    const key = accountId.toLowerCase();
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    normalized.push(accountId);
+  });
+
+  return normalized;
+}
+
 function deriveGroupStatus(participants = [], description = "") {
   const normalizedParticipants = normalizeGroupParticipants(participants);
   const sanitizedDescription = sanitizeStatus(description);
@@ -1800,6 +1820,38 @@ function getContactAccountId(contact) {
   return normalized.accountId ?? null;
 }
 
+function getChatParticipantAccountIds(chat, { includeSelf = false } = {}) {
+  if (!chat || typeof chat !== "object") {
+    return [];
+  }
+
+  const ids = new Set();
+  const addAccountId = (value) => {
+    const normalized = normalizeAccountId(value);
+    if (!normalized) {
+      return;
+    }
+    ids.add(normalized);
+  };
+
+  if (Array.isArray(chat.participantAccountIds)) {
+    chat.participantAccountIds.forEach(addAccountId);
+  }
+
+  if (chat.type === ChatType.DIRECT) {
+    addAccountId(getContactAccountId(chat.contact));
+  }
+
+  if (!includeSelf) {
+    const selfId = normalizeAccountId(authState?.user?.id);
+    if (selfId) {
+      ids.delete(selfId);
+    }
+  }
+
+  return normalizeParticipantAccountIds(Array.from(ids));
+}
+
 function findContactByAccountId(accountId) {
   const normalizedId = normalizeAccountId(accountId);
   if (!normalizedId) {
@@ -2055,6 +2107,10 @@ function normalizeChat(chat) {
     normalizedType === ChatType.GROUP && typeof chat.description === "string"
       ? sanitizeStatus(chat.description)
       : "";
+  const participantAccountIds =
+    normalizedType === ChatType.GROUP
+      ? normalizeParticipantAccountIds(chat.participantAccountIds)
+      : [];
   const normalizedName =
     typeof chat.name === "string" && chat.name.trim()
       ? chat.name.trim()
@@ -2104,6 +2160,7 @@ function normalizeChat(chat) {
     messages: normalizedMessages,
     type: normalizedType,
     participants,
+    participantAccountIds,
     description,
     capabilities,
     ...(normalizedContact && normalizedType !== ChatType.GROUP
@@ -3926,6 +3983,11 @@ function sendOutgoingMessageToServer(chat, message, text, attachments = []) {
     const recipientAccountId = getContactAccountId(chat.contact);
     if (recipientAccountId) {
       payload.recipient_id = recipientAccountId;
+    }
+  } else {
+    const recipientIds = getChatParticipantAccountIds(chat);
+    if (recipientIds.length) {
+      payload.recipient_ids = recipientIds;
     }
   }
 
@@ -5948,6 +6010,7 @@ function createChat(nameInput, options = {}) {
     participants: participantsOverride,
     description: descriptionOverride,
     capabilities: capabilitiesOverride,
+    participantAccountIds: participantAccountIdsOverride,
   } = options ?? {};
   const normalizedContact = normalizeContact(contactDetails);
   const normalizedType =
@@ -5960,6 +6023,10 @@ function createChat(nameInput, options = {}) {
     normalizedType === ChatType.GROUP && typeof descriptionOverride === "string"
       ? sanitizeStatus(descriptionOverride)
       : "";
+  const participantAccountIds =
+    normalizedType === ChatType.GROUP
+      ? normalizeParticipantAccountIds(participantAccountIdsOverride)
+      : [];
   const capabilities = {
     audio:
       capabilitiesOverride && typeof capabilitiesOverride.audio !== "undefined"
@@ -6026,6 +6093,7 @@ function createChat(nameInput, options = {}) {
     messages: [],
     type: normalizedType,
     participants,
+    participantAccountIds,
     description,
     capabilities,
   };
@@ -7644,6 +7712,9 @@ function renderManageParticipantsOptions(query = manageParticipantsSearchInput?.
 
   const existingList = getManageableParticipantNames(chat);
   const existingSet = new Set(existingList.map((name) => name.toLowerCase()));
+  const existingAccountIds = new Set(
+    getChatParticipantAccountIds(chat, { includeSelf: true }).map((id) => id.toLowerCase())
+  );
   const available = sortContacts(contacts);
   const filteredContacts = normalizedQuery
     ? available.filter((contact) => contactMatchesQuery(contact, normalizedQuery))
@@ -7669,15 +7740,18 @@ function renderManageParticipantsOptions(query = manageParticipantsSearchInput?.
       return;
     }
     const sanitizedKey = sanitizedName.toLowerCase();
-    if (seenParticipants.has(sanitizedKey)) {
+    const accountId = normalizeAccountId(normalized.accountId);
+    const participantKey = accountId ? `account:${accountId.toLowerCase()}` : sanitizedKey;
+    if (seenParticipants.has(participantKey)) {
       return;
     }
-    seenParticipants.add(sanitizedKey);
+    seenParticipants.add(participantKey);
     options.push({
       contact: normalized,
       displayName,
       sanitizedName,
       sanitizedKey,
+      accountId,
       rawQuery,
     });
   });
@@ -7704,7 +7778,7 @@ function renderManageParticipantsOptions(query = manageParticipantsSearchInput?.
     manageParticipantsEmptyElement.hidden = true;
   }
 
-  options.forEach(({ contact, displayName, sanitizedName, sanitizedKey, rawQuery: optionQuery }) => {
+  options.forEach(({ contact, displayName, sanitizedName, sanitizedKey, accountId, rawQuery: optionQuery }) => {
     const listItem = document.createElement("li");
     listItem.className = "new-chat__list-item";
 
@@ -7717,6 +7791,11 @@ function renderManageParticipantsOptions(query = manageParticipantsSearchInput?.
     checkbox.value = sanitizedName;
     checkbox.dataset.participantName = sanitizedName;
     checkbox.dataset.participantDisplayName = displayName;
+    if (accountId) {
+      checkbox.dataset.participantAccountId = accountId;
+    } else {
+      delete checkbox.dataset.participantAccountId;
+    }
 
     const nameNode = document.createElement("span");
     nameNode.className = "new-chat__contact-name";
@@ -7730,7 +7809,7 @@ function renderManageParticipantsOptions(query = manageParticipantsSearchInput?.
       (contact.nickname && contact.nickname !== displayName ? contact.nickname : "") ||
       getContactPreviewText(contact) ||
       deriveContactStatus(contact);
-    if (existingSet.has(sanitizedKey)) {
+    if (existingSet.has(sanitizedKey) || (accountId && existingAccountIds.has(accountId.toLowerCase()))) {
       checkbox.checked = true;
       checkbox.disabled = true;
       label.classList.add("new-chat__contact--existing");
@@ -7905,17 +7984,32 @@ function handleManageParticipantsConfirm() {
 
   const existingOrdered = getManageableParticipantNames(chat);
   const existingSet = new Set(existingOrdered.map((name) => name.toLowerCase()));
+  const accountIdSet = new Set(
+    normalizeParticipantAccountIds(getChatParticipantAccountIds(chat, { includeSelf: true }))
+  );
+  const accountKeySet = new Set(Array.from(accountIdSet).map((id) => id.toLowerCase()));
   const addedNames = [];
 
   selectedInputs.forEach((input) => {
     const name = input.dataset.participantName ?? input.value ?? "";
     const normalized = normalizeGroupParticipants([name])[0];
     const key = typeof normalized === "string" ? normalized.toLowerCase() : "";
-    if (!key || existingSet.has(key)) {
+    const rawAccountId = input.dataset.participantAccountId ?? "";
+    const normalizedAccountId = normalizeAccountId(rawAccountId);
+    const accountKey = normalizedAccountId ? normalizedAccountId.toLowerCase() : "";
+    if ((accountKey && accountKeySet.has(accountKey)) || (!accountKey && (!key || existingSet.has(key)))) {
       return;
     }
-    existingSet.add(key);
-    addedNames.push(normalized);
+    if (key) {
+      existingSet.add(key);
+    }
+    if (accountKey) {
+      accountIdSet.add(normalizedAccountId);
+      accountKeySet.add(accountKey);
+    }
+    if (normalized) {
+      addedNames.push(normalized);
+    }
   });
 
   if (!addedNames.length) {
@@ -7929,8 +8023,16 @@ function handleManageParticipantsConfirm() {
     ...addedNames,
   ]);
 
+  const selfAccountId = normalizeAccountId(authState?.user?.id);
+  if (selfAccountId) {
+    accountIdSet.delete(selfAccountId);
+    accountKeySet.delete(selfAccountId.toLowerCase());
+  }
+  const updatedParticipantAccountIds = normalizeParticipantAccountIds(Array.from(accountIdSet));
+
   const wasGroup = chat.type === ChatType.GROUP;
   chat.participants = updatedParticipants;
+  chat.participantAccountIds = updatedParticipantAccountIds;
   if (!wasGroup) {
     // Promote direct conversations to groups once additional participants are added so
     // future management reuses the shared group code paths.
