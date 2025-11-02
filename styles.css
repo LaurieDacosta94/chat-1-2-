@@ -588,49 +588,16 @@ body.auth-locked .app {
   background: #008069;
 }
 
-.chat__participant-text {
-  display: flex;
-  flex-direction: column;
-  line-height: 1.15;
-}
-
 .chat__participant-name {
   font-size: 0.85rem;
   font-weight: 500;
   white-space: nowrap;
 }
 
-.chat__participant-username {
-  font-size: 0.7rem;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-:root[data-theme="light"] .chat__participant-username {
-  color: rgba(17, 27, 33, 0.72);
-}
-
 .chat__contact {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  border: none;
-  background: none;
-  padding: 0;
-  margin: 0;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.chat__contact:disabled {
-  cursor: default;
-}
-
-.chat__contact:focus-visible {
-  outline: 2px solid rgba(37, 211, 102, 0.75);
-  outline-offset: 4px;
 }
 
 .chat__name {
