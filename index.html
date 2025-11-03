@@ -249,15 +249,6 @@
             >
               🎥
             </button>
-            <button
-              class="icon-button icon-button--premium"
-              id="start-phone-call"
-              aria-label="Start direct phone call"
-              title="Start direct phone call"
-              type="button"
-            >
-              ☎️
-            </button>
           </div>
           <button
             class="icon-button"
@@ -900,62 +891,6 @@
     </div>
   </div>
 
-  <div
-    class="modal"
-    id="call-plan-modal"
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="call-plan-title"
-    hidden
-  >
-    <div class="modal__backdrop" data-close-modal></div>
-    <div class="modal__content" role="document">
-      <header class="modal__header">
-        <h2 class="modal__title" id="call-plan-title">Direct phone calls</h2>
-        <button class="icon-button modal__close" id="call-plan-close" aria-label="Close direct call plans">✕</button>
-      </header>
-      <form class="call-plan" id="call-plan-form">
-        <p class="call-plan__intro">
-          Choose a subscription to unlock high-quality phone calls directly from the app.
-        </p>
-        <fieldset class="call-plan__options">
-          <legend class="call-plan__legend">Plans</legend>
-          <label class="call-plan__option">
-            <input type="radio" name="call-plan" value="standard" checked />
-            <div class="call-plan__option-body">
-              <span class="call-plan__option-name">Standard</span>
-              <span class="call-plan__option-price">$4.99/mo</span>
-              <span class="call-plan__option-description"
-                >Unlimited domestic calling, HD audio quality.</span
-              >
-            </div>
-          </label>
-          <label class="call-plan__option">
-            <input type="radio" name="call-plan" value="pro" />
-            <div class="call-plan__option-body">
-              <span class="call-plan__option-name">Pro</span>
-              <span class="call-plan__option-price">$9.99/mo</span>
-              <span class="call-plan__option-description"
-                >Global calling bundle, voicemail transcription, call analytics.</span
-              >
-            </div>
-          </label>
-        </fieldset>
-        <div class="call-plan__summary" id="call-plan-summary">
-          Unlimited domestic calling, HD audio quality.
-        </div>
-        <div class="call-plan__actions">
-          <button class="call-plan__button call-plan__button--secondary" type="button" id="call-plan-cancel">
-            Cancel
-          </button>
-          <button class="call-plan__button call-plan__button--primary" type="submit" id="call-plan-confirm">
-            Start phone call
-          </button>
-        </div>
-      </form>
-    </div>
-  </div>
-
   <div class="call-overlay" id="call-overlay" hidden aria-live="assertive">
     <div class="call-overlay__backdrop" id="call-overlay-backdrop"></div>
     <div class="call-overlay__card" role="dialog" aria-modal="true">
@@ -964,7 +899,7 @@
         <button class="icon-button call-overlay__close" type="button" id="call-overlay-close" aria-label="Close call window">✕</button>
       </header>
       <div class="call-overlay__body">
-        <div class="call-overlay__avatar" id="call-overlay-avatar" aria-hidden="true"></div>
+        <div class="call-overlay__participants" id="call-overlay-participants" role="list"></div>
         <div class="call-overlay__details">
           <div class="call-overlay__name" id="call-overlay-name"></div>
           <div class="call-overlay__status" id="call-overlay-status"></div>
