@@ -8258,6 +8258,33 @@ function handleChatWallpaperUseDefault(event) {
   closeChatWallpaperModal();
 }
 
+function resolveCallPermissionErrorMessage(action, error) {
+  // Normalize browser-specific DOMException names so we can surface more actionable
+  // guidance when microphone/camera access fails. This keeps the call overlay UX
+  // consistent and gives users clear next steps instead of a generic failure toast.
+  const defaultMessage = action === "accept" ? "Unable to join the call." : "Unable to start the call.";
+  if (!error || typeof error.name !== "string") {
+    return defaultMessage;
+  }
+
+  const normalizedName = error.name.toLowerCase();
+  const actionLabel = action === "accept" ? "join the call" : "start the call";
+
+  if (normalizedName === "notallowederror" || normalizedName === "permissiondeniederror") {
+    return `Microphone or camera permission is required to ${actionLabel}. Please allow access in your browser settings.`;
+  }
+
+  if (normalizedName === "securityerror" && typeof window !== "undefined" && window.isSecureContext === false) {
+    return "Calls require a secure (HTTPS) connection. Reload the page using HTTPS to continue.";
+  }
+
+  if (normalizedName === "notfounderror" || normalizedName === "devicesnotfounderror") {
+    return "No microphone or camera was detected. Connect an input device and try again.";
+  }
+
+  return defaultMessage;
+}
+
 async function startCall(callType) {
   if (
     !window.RTCPeerConnection ||
@@ -8376,10 +8403,7 @@ async function startCall(callType) {
     setActiveCallState(CallState.INITIATING);
   } catch (error) {
     console.error("Failed to start call", error);
-    const errorMessage =
-      error && typeof error.name === "string" && error.name === "NotAllowedError"
-        ? "Microphone or camera permission is required to start the call."
-        : "Unable to start the call.";
+    const errorMessage = resolveCallPermissionErrorMessage("start", error);
     showToast(errorMessage);
     endActiveCall({ reason: "Call unavailable", suppressToast: true, signalRemote: false });
   }
@@ -8884,7 +8908,8 @@ async function acceptIncomingCall() {
     setActiveCallState(CallState.CONNECTING);
   } catch (error) {
     console.error("Failed to accept call", error);
-    showToast("Unable to join the call.");
+    const errorMessage = resolveCallPermissionErrorMessage("accept", error);
+    showToast(errorMessage);
     endActiveCall({ reason: "Call unavailable", suppressToast: true, signalRemote: true });
   }
 }
