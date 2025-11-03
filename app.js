@@ -4061,7 +4061,12 @@ async function handleRealtimeCallAnswer(payload) {
     return;
   }
 
-  if (activeCall.hasRemoteDescription || connection.remoteDescription) {
+  const remoteDescriptionApplied = Boolean(
+    activeCall.hasRemoteDescription ||
+      connection.remoteDescription ||
+      connection.currentRemoteDescription
+  );
+  if (remoteDescriptionApplied) {
     console.warn(
       "Ignoring remote call answer because a description has already been applied"
     );
@@ -4085,6 +4090,29 @@ async function handleRealtimeCallAnswer(payload) {
     flushPendingCallCandidates();
     setActiveCallState(CallState.CONNECTING);
   } catch (error) {
+    const hasAppliedRemoteDescription = Boolean(
+      connection.remoteDescription || connection.currentRemoteDescription
+    );
+    const isUnexpectedState =
+      connection.signalingState !== "have-local-offer" &&
+      connection.signalingState !== "have-local-pranswer";
+
+    if (error?.name === "InvalidStateError" && hasAppliedRemoteDescription && isUnexpectedState) {
+      // Browsers may surface a transient InvalidStateError if a duplicate answer arrives
+      // after the first answer has already completed negotiation. In that case, treat the
+      // second answer as a no-op instead of tearing down the call.
+      console.warn(
+        "Received duplicate remote call answer after remote description was already set",
+        error
+      );
+      activeCall.hasRemoteDescription = true;
+      flushPendingCallCandidates();
+      if (activeCall.state === CallState.INITIATING || activeCall.state === CallState.RINGING) {
+        setActiveCallState(CallState.CONNECTING);
+      }
+      return;
+    }
+
     console.error("Failed to apply remote call answer", error);
     endActiveCall({ reason: "Call unavailable", suppressToast: false, signalRemote: false });
   }
