@@ -1464,12 +1464,21 @@ function createLinkPreviewAttachment(preview) {
 }
 
 function normalizeGroupParticipants(participants = []) {
+  const seen = new Set();
   return participants
     .map((participant) =>
       typeof participant === "string" ? participant.trim() : ""
     )
     .filter(Boolean)
-    .map((name) => truncateText(name, 60));
+    .map((name) => truncateText(name, 60))
+    .filter((name) => {
+      const key = name.toLowerCase();
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
 }
 
 function normalizeParticipantAccountIds(accountIds = []) {
@@ -1526,6 +1535,303 @@ function buildGroupTooltip(chat) {
     return "Group chat";
   }
   return `Participants: ${names.join(", ")}`;
+}
+
+function upsertParticipantProfile(accountId, { username, displayName } = {}) {
+  const normalizedId = normalizeAccountId(accountId);
+  if (!normalizedId) {
+    return;
+  }
+
+  const existing = participantDirectory.get(normalizedId) ?? {};
+  const next = { ...existing };
+
+  const trimmedUsername =
+    typeof username === "string" && username.trim() ? username.trim() : "";
+  const trimmedDisplayName =
+    typeof displayName === "string" && displayName.trim()
+      ? displayName.trim()
+      : "";
+
+  if (trimmedUsername) {
+    next.username = trimmedUsername;
+  }
+  if (trimmedDisplayName) {
+    next.displayName = trimmedDisplayName;
+  } else if (!next.displayName) {
+    next.displayName = next.username || normalizedId;
+  }
+
+  participantDirectory.set(normalizedId, next);
+}
+
+function ensureSelfParticipant(chat) {
+  if (!chat) {
+    return false;
+  }
+
+  const selfName = getSelfParticipantName();
+  const selfId = normalizeAccountId(authState?.user?.id);
+  const selfUsername =
+    typeof authState?.user?.username === "string" && authState.user.username.trim()
+      ? authState.user.username.trim()
+      : "";
+
+  let mutated = false;
+
+  const existingNames = Array.isArray(chat.participants)
+    ? chat.participants
+    : [];
+  if (selfName) {
+    const updatedNames = normalizeGroupParticipants([...existingNames, selfName]);
+    if (
+      updatedNames.length !== existingNames.length ||
+      existingNames.some((value, index) => value !== updatedNames[index])
+    ) {
+      chat.participants = updatedNames;
+      mutated = true;
+    }
+  } else if (!Array.isArray(chat.participants)) {
+    chat.participants = [];
+  }
+
+  if (selfId) {
+    upsertParticipantProfile(selfId, {
+      username: selfUsername,
+      displayName: selfName || selfUsername || undefined,
+    });
+  }
+
+  return mutated;
+}
+
+function maybePromoteChatToGroup(chat) {
+  if (!chat || chat.type === ChatType.GROUP) {
+    return false;
+  }
+
+  const normalizedAccountIds = normalizeParticipantAccountIds(
+    Array.isArray(chat.participantAccountIds) ? chat.participantAccountIds : []
+  );
+  const selfId = normalizeAccountId(authState?.user?.id);
+  const otherAccounts = normalizedAccountIds.filter((id) => {
+    if (!selfId) return true;
+    return id.toLowerCase() !== selfId.toLowerCase();
+  });
+  const normalizedNames = normalizeGroupParticipants(chat.participants);
+
+  if (otherAccounts.length < 2 && normalizedNames.length < 3) {
+    return false;
+  }
+
+  chat.type = ChatType.GROUP;
+  if (chat.contact) {
+    delete chat.contact;
+  }
+  chat.capabilities = {
+    audio: chat.capabilities?.audio !== false,
+    video: chat.capabilities?.video !== false,
+    phone: false,
+  };
+  return true;
+}
+
+function recordChatParticipant(
+  chat,
+  { accountId, name, username, isSelf = false } = {}
+) {
+  if (!chat) {
+    return { mutated: false, displayName: "" };
+  }
+
+  const normalizedAccountId = normalizeAccountId(accountId);
+  const normalizedUsername =
+    typeof username === "string" && username.trim() ? username.trim() : "";
+  const normalizedName =
+    typeof name === "string" && name.trim() ? truncateText(name.trim(), 60) : "";
+
+  if (!Array.isArray(chat.participants)) {
+    chat.participants = [];
+  }
+  if (!Array.isArray(chat.participantAccountIds)) {
+    chat.participantAccountIds = [];
+  }
+
+  let mutated = false;
+
+  if (normalizedAccountId && !isSelf) {
+    const existingIds = normalizeParticipantAccountIds(chat.participantAccountIds);
+    const updatedIds = normalizeParticipantAccountIds([
+      ...existingIds,
+      normalizedAccountId,
+    ]);
+    if (
+      updatedIds.length !== existingIds.length ||
+      existingIds.some((value, index) => value !== updatedIds[index])
+    ) {
+      chat.participantAccountIds = updatedIds;
+      mutated = true;
+    }
+  }
+
+  if (normalizedAccountId) {
+    const fallbackDisplayName =
+      normalizedName ||
+      normalizedUsername ||
+      (isSelf ? getSelfParticipantName() : "");
+    upsertParticipantProfile(normalizedAccountId, {
+      username: normalizedUsername,
+      displayName:
+        fallbackDisplayName ||
+        participantDirectory.get(normalizedAccountId)?.displayName ||
+        undefined,
+    });
+  }
+
+  const label = (() => {
+    if (normalizedName) return normalizedName;
+    if (isSelf) return getSelfParticipantName();
+    if (normalizedUsername) return normalizedUsername;
+    if (normalizedAccountId && !isSelf) return normalizedAccountId;
+    return "";
+  })();
+
+  if (label) {
+    const updatedNames = normalizeGroupParticipants([...chat.participants, label]);
+    if (
+      updatedNames.length !== chat.participants.length ||
+      chat.participants.some((value, index) => value !== updatedNames[index])
+    ) {
+      chat.participants = updatedNames;
+      mutated = true;
+    }
+  }
+
+  if (!isSelf && ensureSelfParticipant(chat)) {
+    mutated = true;
+  }
+
+  if (maybePromoteChatToGroup(chat)) {
+    mutated = true;
+  }
+
+  if (mutated && chat.type === ChatType.GROUP) {
+    chat.status = deriveGroupStatus(chat.participants, chat.description);
+  }
+
+  const profile = normalizedAccountId ? participantDirectory.get(normalizedAccountId) : null;
+  const displayName =
+    label ||
+    profile?.displayName ||
+    normalizedUsername ||
+    (normalizedAccountId && !isSelf ? normalizedAccountId : "");
+
+  return { mutated, displayName };
+}
+
+function updateChatParticipantsFromPayload(chat, payload, message) {
+  if (!chat || !payload) {
+    return false;
+  }
+
+  const senderIdFromPayload = normalizeAccountId(payload?.sender_id);
+  const senderIdFromMessage = normalizeAccountId(message?.senderId);
+  const senderId = senderIdFromPayload || senderIdFromMessage || null;
+
+  if (message && senderId && !message.senderId) {
+    message.senderId = senderId;
+  }
+
+  const senderUsernameFromPayload =
+    typeof payload?.sender_username === "string" && payload.sender_username.trim()
+      ? payload.sender_username.trim()
+      : "";
+  const senderUsernameFromMessage =
+    typeof message?.senderUsername === "string" && message.senderUsername.trim()
+      ? message.senderUsername.trim()
+      : "";
+  const senderUsername = senderUsernameFromPayload || senderUsernameFromMessage;
+
+  if (message && senderUsername && !message.senderUsername) {
+    message.senderUsername = senderUsername;
+  }
+
+  const selfId = normalizeAccountId(authState?.user?.id);
+  const isSelf = senderId && selfId && senderId === selfId;
+  const preferredName =
+    message?.senderDisplayName ||
+    (isSelf ? getSelfParticipantName() : "") ||
+    senderUsername ||
+    (senderId ? participantDirectory.get(senderId)?.displayName : "");
+
+  const { mutated, displayName } = recordChatParticipant(chat, {
+    accountId: senderId,
+    name: preferredName,
+    username: senderUsername,
+    isSelf,
+  });
+
+  const authorLabel =
+    displayName ||
+    preferredName ||
+    (isSelf ? getSelfParticipantName() : "") ||
+    senderUsername ||
+    (senderId || "");
+
+  if (message && authorLabel) {
+    message.senderDisplayName = authorLabel;
+  }
+
+  return mutated;
+}
+
+function updateChatParticipantsFromMessage(chat, message) {
+  if (!chat || !message) {
+    return false;
+  }
+
+  return updateChatParticipantsFromPayload(
+    chat,
+    { sender_id: message.senderId, sender_username: message.senderUsername },
+    message
+  );
+}
+
+function getMessageAuthorLabel(chat, message) {
+  if (!chat || chat.type !== ChatType.GROUP || !message) {
+    return "";
+  }
+
+  if (typeof message.senderDisplayName === "string" && message.senderDisplayName.trim()) {
+    return message.senderDisplayName.trim();
+  }
+
+  const senderId = normalizeAccountId(message.senderId);
+  const selfId = normalizeAccountId(authState?.user?.id);
+  if (senderId && selfId && senderId === selfId) {
+    return getSelfParticipantName();
+  }
+
+  if (senderId) {
+    const profile = participantDirectory.get(senderId);
+    if (profile?.displayName) {
+      return profile.displayName;
+    }
+  }
+
+  if (typeof message.senderUsername === "string" && message.senderUsername.trim()) {
+    return message.senderUsername.trim();
+  }
+
+  if (senderId) {
+    return senderId;
+  }
+
+  if (message.direction === "outgoing") {
+    return getSelfParticipantName();
+  }
+
+  return "";
 }
 
 function normalizePhoneNumber(value) {
@@ -3738,6 +4044,10 @@ function buildLocalMessageFromServer(chatId, payload) {
   const parsed = new Date(rawTimestamp);
   const timestamp = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
   const senderId = payload.sender_id ?? null;
+  const senderUsername =
+    typeof payload.sender_username === "string" && payload.sender_username.trim()
+      ? payload.sender_username.trim()
+      : "";
   const direction = senderId !== null && authState?.user?.id === senderId ? "outgoing" : "incoming";
   const readBy = normalizeReadReceiptList(payload.read_by);
 
@@ -3758,6 +4068,10 @@ function buildLocalMessageFromServer(chatId, payload) {
     senderId,
     readBy,
   };
+
+  if (senderUsername) {
+    message.senderUsername = senderUsername;
+  }
 
   if (direction === "outgoing") {
     message.status = MessageStatus.DELIVERED;
@@ -3928,6 +4242,15 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false, 
       return;
     }
 
+    const participantsMutated = updateChatParticipantsFromPayload(
+      chat,
+      payload,
+      normalizedMessage
+    );
+    if (participantsMutated) {
+      mutated = true;
+    }
+
     if (normalizedMessage.serverId && serverMessageIds?.has(normalizedMessage.serverId)) {
       const existing = chat.messages.find((message) => message.serverId === normalizedMessage.serverId);
       if (existing) {
@@ -3939,10 +4262,14 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false, 
             : Array.isArray(normalizedMessage.attachments)
             ? normalizedMessage.attachments
             : [];
+        const previousDisplayName = existing.senderDisplayName;
         Object.assign(existing, normalizedMessage, {
           id: preservedId,
           attachments: nextAttachments,
         });
+        if (previousDisplayName && !existing.senderDisplayName) {
+          existing.senderDisplayName = previousDisplayName;
+        }
         applyReadReceiptsToMessage(chat, existing, normalizedMessage.readBy);
         serverMessageIds.add(normalizedMessage.serverId);
         if (normalizedMessage.clientId) {
@@ -3965,10 +4292,14 @@ function applyServerMessages(chatId, serverPayloads, { replaceExisting = false, 
               : Array.isArray(normalizedMessage.attachments)
               ? normalizedMessage.attachments
               : [];
+          const previousDisplayName = existing.senderDisplayName;
           Object.assign(existing, normalizedMessage, {
             id: existing.id,
             attachments: nextAttachments,
           });
+          if (previousDisplayName && !existing.senderDisplayName) {
+            existing.senderDisplayName = previousDisplayName;
+          }
           maybeEnrichMessageWithLinkPreview(chat, existing);
           applyReadReceiptsToMessage(chat, existing, normalizedMessage.readBy);
           if (normalizedMessage.serverId && serverMessageIds) {
@@ -5948,6 +6279,7 @@ function renderChatParticipants(chat) {
     participant.className = "chat__participant";
     participant.dataset.participantKey = entry.key;
     participant.dataset.participantInContacts = entry.isInContacts ? "true" : "false";
+    participant.dataset.participantSelf = entry.isSelf ? "true" : "false";
     if (entry.accountId) {
       participant.dataset.participantAccountId = entry.accountId;
     }
@@ -5956,7 +6288,10 @@ function renderChatParticipants(chat) {
     }
     participant.dataset.participantName = entry.displayName || entry.displayLabel;
 
-    if (!entry.isInContacts) {
+    if (entry.isSelf) {
+      participant.classList.add("chat__participant--self");
+      participant.title = "You";
+    } else if (!entry.isInContacts) {
       participant.classList.add("chat__participant--actionable");
       participant.title = `Add ${entry.displayLabel} to contacts`;
     } else {
@@ -5982,7 +6317,7 @@ function renderChatParticipants(chat) {
       details.appendChild(usernameNode);
     }
 
-    if (!entry.isInContacts) {
+    if (!entry.isSelf && !entry.isInContacts) {
       const hintNode = document.createElement("span");
       hintNode.className = "chat__participant-hint";
       hintNode.textContent = "Add to contacts";
@@ -6007,7 +6342,12 @@ function buildParticipantEntries(chat) {
   const normalizedAccountIds = normalizeParticipantAccountIds(chat.participantAccountIds);
   const normalizedNames = normalizeGroupParticipants(chat.participants);
   const entries = [];
-  const seen = new Set();
+  const seenKeys = new Set();
+  const seenLabels = new Set();
+
+  const selfId = normalizeAccountId(authState?.user?.id);
+  const selfName = getSelfParticipantName();
+  const selfNameKey = selfName ? selfName.trim().toLowerCase() : "";
 
   const contactsByAccountId = new Map();
   const contactsByName = new Map();
@@ -6034,16 +6374,30 @@ function buildParticipantEntries(chat) {
       });
     });
 
+  const addEntry = (entry) => {
+    const labelKey =
+      typeof entry.displayLabel === "string" && entry.displayLabel
+        ? entry.displayLabel.toLowerCase()
+        : "";
+    if (labelKey && seenLabels.has(labelKey)) {
+      return;
+    }
+    if (labelKey) {
+      seenLabels.add(labelKey);
+    }
+    entries.push(entry);
+  };
+
   normalizedAccountIds.forEach((accountId) => {
     const normalizedId = normalizeAccountId(accountId);
     if (!normalizedId) {
       return;
     }
     const key = `account:${normalizedId.toLowerCase()}`;
-    if (seen.has(key)) {
+    if (seenKeys.has(key)) {
       return;
     }
-    seen.add(key);
+    seenKeys.add(key);
 
     const contact = contactsByAccountId.get(normalizedId) ?? null;
     const directory = participantDirectory.get(normalizedId) ?? null;
@@ -6057,14 +6411,18 @@ function buildParticipantEntries(chat) {
       "";
     const label = displayName || (username ? `@${username}` : normalizedId);
 
-    entries.push({
+    const isSelf =
+      selfId && normalizedId ? normalizedId.toLowerCase() === selfId.toLowerCase() : false;
+
+    addEntry({
       key,
       accountId: normalizedId,
       username,
       displayName,
       displayLabel: label,
       avatarLabel: displayName || username || normalizedId,
-      isInContacts: Boolean(contact),
+      isInContacts: isSelf ? true : Boolean(contact),
+      isSelf,
     });
   });
 
@@ -6074,10 +6432,10 @@ function buildParticipantEntries(chat) {
       return;
     }
     const key = `name:${trimmed.toLowerCase()}`;
-    if (seen.has(key)) {
+    if (seenKeys.has(key)) {
       return;
     }
-    seen.add(key);
+    seenKeys.add(key);
 
     const contact = contactsByName.get(trimmed.toLowerCase()) ?? null;
     const accountId = contact?.accountId ?? null;
@@ -6087,14 +6445,24 @@ function buildParticipantEntries(chat) {
       (contact && contact.username) ||
       "";
 
-    entries.push({
+    const normalizedAccountId = normalizeAccountId(accountId);
+    const matchesSelfById =
+      normalizedAccountId && selfId
+        ? normalizedAccountId.toLowerCase() === selfId.toLowerCase()
+        : false;
+    const matchesSelfByName =
+      selfNameKey && trimmed.toLowerCase() === selfNameKey ? true : false;
+    const isSelf = matchesSelfById || matchesSelfByName;
+
+    addEntry({
       key,
       accountId: accountId ?? undefined,
       username,
       displayName: trimmed,
       displayLabel: trimmed,
       avatarLabel: trimmed,
-      isInContacts: Boolean(contact),
+      isInContacts: isSelf ? true : Boolean(contact),
+      isSelf,
     });
   });
 
@@ -6179,10 +6547,16 @@ function handleParticipantChipClick(event) {
   }
 
   const inContacts = button.dataset.participantInContacts === "true";
+  const isSelf = button.dataset.participantSelf === "true";
   const name = button.dataset.participantName ?? "";
   const username = button.dataset.participantUsername ?? "";
   const accountId = button.dataset.participantAccountId ?? "";
   const label = name || (username ? `@${username}` : accountId || "This participant");
+
+  if (isSelf) {
+    showToast("That's you");
+    return;
+  }
 
   if (inContacts) {
     showToast(`${label} is already saved in your contacts`);
@@ -6413,6 +6787,7 @@ function renderChatView(chat) {
     const timeNode = messageNode.querySelector(".message__time");
     const statusNode = messageNode.querySelector(".message__status");
     const attachmentsContainer = messageNode.querySelector(".message__attachments");
+    const authorNode = messageNode.querySelector(".message__author");
 
     const messageText = typeof message.text === "string" ? message.text : "";
     const messageTextLower = messageText.toLowerCase();
@@ -6477,6 +6852,20 @@ function renderChatView(chat) {
       }
     }
 
+    const authorLabel = getMessageAuthorLabel(chat, message);
+    const shouldShowAuthor = chat.type === ChatType.GROUP && Boolean(authorLabel);
+    if (authorNode) {
+      if (shouldShowAuthor) {
+        authorNode.hidden = false;
+        authorNode.textContent = authorLabel;
+        authorNode.setAttribute("aria-hidden", "false");
+      } else {
+        authorNode.hidden = true;
+        authorNode.textContent = "";
+        authorNode.setAttribute("aria-hidden", "true");
+      }
+    }
+
     if (timeNode) {
       timeNode.textContent = formattedTime;
       if (message.sentAt) {
@@ -6487,6 +6876,9 @@ function renderChatView(chat) {
     }
 
     const accessibleParts = [];
+    if (shouldShowAuthor) {
+      accessibleParts.push(authorLabel);
+    }
     if (attachments.length) {
       accessibleParts.push(
         attachments.length === 1
@@ -6604,8 +6996,19 @@ function addMessageToChat(chatId, text, direction = "outgoing", attachments = []
   if (isOutgoing && authState?.user?.id !== undefined) {
     newMessage.senderId = authState.user.id;
   }
+  if (isOutgoing) {
+    const username =
+      typeof authState?.user?.username === "string" && authState.user.username.trim()
+        ? authState.user.username.trim()
+        : "";
+    if (username) {
+      newMessage.senderUsername = username;
+    }
+  }
   chat.messages.push(newMessage);
   chat.messages.sort((a, b) => getMessageTimeValue(a) - getMessageTimeValue(b));
+
+  updateChatParticipantsFromMessage(chat, newMessage);
 
   maybeEnrichMessageWithLinkPreview(chat, newMessage);
 
