@@ -891,21 +891,46 @@
     </div>
   </div>
 
-  <div class="call-overlay" id="call-overlay" hidden aria-live="assertive">
+  <div class="call-overlay" id="call-overlay" hidden aria-live="assertive" data-call-state="idle">
     <div class="call-overlay__backdrop" id="call-overlay-backdrop"></div>
-    <div class="call-overlay__card" role="dialog" aria-modal="true">
+    <div
+      class="call-overlay__card"
+      id="call-overlay-card"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="call-overlay-type"
+    >
       <header class="call-overlay__header">
         <span class="call-overlay__type" id="call-overlay-type"></span>
         <button class="icon-button call-overlay__close" type="button" id="call-overlay-close" aria-label="Close call window">✕</button>
       </header>
       <div class="call-overlay__body">
+        <div class="call-overlay__media" id="call-overlay-media" hidden>
+          <div class="call-overlay__video-wrapper call-overlay__video-wrapper--remote" id="call-remote-video-wrapper">
+            <video class="call-overlay__video call-overlay__video--remote" id="call-remote-video" autoplay playsinline></video>
+            <div class="call-overlay__video-label" id="call-remote-video-label">Participant</div>
+          </div>
+          <div class="call-overlay__video-wrapper call-overlay__video-wrapper--local" id="call-local-video-wrapper">
+            <video class="call-overlay__video call-overlay__video--local" id="call-local-video" autoplay playsinline muted></video>
+            <div class="call-overlay__video-label" id="call-local-video-label">You</div>
+          </div>
+          <audio class="call-overlay__audio" id="call-remote-audio" autoplay></audio>
+        </div>
         <div class="call-overlay__participants" id="call-overlay-participants" role="list"></div>
         <div class="call-overlay__details">
           <div class="call-overlay__name" id="call-overlay-name"></div>
           <div class="call-overlay__status" id="call-overlay-status"></div>
         </div>
       </div>
-      <div class="call-overlay__controls">
+      <div class="call-overlay__incoming" id="call-overlay-incoming-controls" hidden aria-hidden="true">
+        <button class="call-overlay__button call-overlay__button--primary" type="button" id="call-overlay-accept">
+          Accept
+        </button>
+        <button class="call-overlay__button call-overlay__button--end" type="button" id="call-overlay-decline">
+          Decline
+        </button>
+      </div>
+      <div class="call-overlay__controls" id="call-overlay-controls" aria-hidden="true">
         <button
           class="call-overlay__button"
           type="button"

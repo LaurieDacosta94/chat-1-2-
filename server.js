@@ -1775,6 +1775,205 @@ io.on('connection', (socket) => {
     socket.emit('authenticated', { userId: authenticatedUserId });
   });
 
+  const emitCallEvent = (eventName, payload, recipients = []) => {
+    if (!eventName || !payload) {
+      return;
+    }
+
+    const normalizedChatId =
+      typeof payload.chat_id === 'string' && payload.chat_id.trim()
+        ? payload.chat_id.trim()
+        : null;
+
+    if (normalizedChatId) {
+      socket.to(normalizedChatId).emit(eventName, payload);
+    }
+
+    const recipientIds = Array.isArray(recipients)
+      ? recipients
+      : Array.from(recipients || []);
+
+    recipientIds.forEach((userId) => {
+      const sockets = userSocketMap.get(userId);
+      if (!sockets) return;
+      sockets.forEach((socketId) => {
+        if (socketId === socket.id) return;
+        io.to(socketId).emit(eventName, payload);
+      });
+    });
+  };
+
+  const emitCallError = (message) => {
+    const normalizedMessage =
+      typeof message === 'string' && message.trim()
+        ? message.trim()
+        : 'Call signaling failed.';
+    socket.emit('call:error', { error: normalizedMessage });
+  };
+
+  const prepareCallSignalPayload = async (
+    eventName,
+    payload,
+    { requireOffer = false, requireAnswer = false, requireCandidate = false, normalizeCallType = false } = {}
+  ) => {
+    if (!authenticatedUserId) {
+      const errorMessage = 'Authenticate before participating in calls.';
+      socket.emit('authError', { error: errorMessage });
+      emitCallError(errorMessage);
+      return null;
+    }
+
+    if (!payload || typeof payload !== 'object') {
+      console.warn(`Ignoring ${eventName} with invalid payload from socket ${socket.id}.`);
+      emitCallError('Invalid call payload.');
+      return null;
+    }
+
+    const normalizedChatId = normalizeChatId(payload.chat_id);
+    if (!normalizedChatId) {
+      emitCallError('chat_id is required for call signaling.');
+      return null;
+    }
+
+    let senderRecord;
+    try {
+      senderRecord = await findUserById(authenticatedUserId);
+    } catch (error) {
+      console.error(`Failed to verify caller before forwarding ${eventName}`, error);
+      socket.emit('authError', { error: 'Authentication error.' });
+      emitCallError('Authentication error.');
+      return null;
+    }
+
+    if (!senderRecord) {
+      socket.emit('authError', { error: 'Account no longer exists.' });
+      emitCallError('Account no longer exists.');
+      removeSocketForUser(authenticatedUserId, socket.id);
+      authenticatedUserId = null;
+      return null;
+    }
+
+    const normalizedSenderId = normalizeUserId(authenticatedUserId);
+    const recipients = collectNormalizedRecipientIds({
+      recipientId: payload.recipient_id,
+      recipientIds: payload.recipient_ids,
+    });
+    if (normalizedSenderId) {
+      recipients.delete(normalizedSenderId);
+    }
+
+    const sanitizedPayload = { ...payload, chat_id: normalizedChatId };
+    delete sanitizedPayload.recipient_id;
+
+    if (recipients.size) {
+      sanitizedPayload.recipient_ids = Array.from(recipients);
+    } else {
+      delete sanitizedPayload.recipient_ids;
+    }
+
+    if (normalizedSenderId) {
+      sanitizedPayload.from = normalizedSenderId;
+      sanitizedPayload.from_user_id = normalizedSenderId;
+    } else {
+      delete sanitizedPayload.from;
+      delete sanitizedPayload.from_user_id;
+    }
+
+    const senderUsername =
+      typeof senderRecord.username === 'string' && senderRecord.username.trim()
+        ? senderRecord.username.trim()
+        : null;
+    if (senderUsername) {
+      sanitizedPayload.from_username = senderUsername;
+    } else {
+      delete sanitizedPayload.from_username;
+    }
+
+    if (typeof sanitizedPayload.reason === 'string') {
+      const trimmedReason = sanitizedPayload.reason.trim();
+      if (trimmedReason) {
+        sanitizedPayload.reason = trimmedReason;
+      } else {
+        delete sanitizedPayload.reason;
+      }
+    }
+
+    if (normalizeCallType) {
+      const rawType =
+        typeof payload.call_type === 'string' ? payload.call_type.trim().toLowerCase() : null;
+      if (rawType === 'video' || rawType === 'audio') {
+        sanitizedPayload.call_type = rawType;
+      } else if (normalizeCallType === 'required') {
+        sanitizedPayload.call_type = 'audio';
+      } else {
+        delete sanitizedPayload.call_type;
+      }
+    }
+
+    if (requireOffer) {
+      const offer = payload.offer;
+      if (!offer || typeof offer !== 'object' || typeof offer.sdp !== 'string' || !offer.sdp.trim()) {
+        emitCallError('A valid call offer is required.');
+        return null;
+      }
+      const offerType =
+        typeof offer.type === 'string' && offer.type.trim() ? offer.type.trim() : 'offer';
+      sanitizedPayload.offer = { type: offerType, sdp: offer.sdp };
+    } else if ('offer' in sanitizedPayload) {
+      const offer = sanitizedPayload.offer;
+      if (!offer || typeof offer !== 'object' || typeof offer.sdp !== 'string') {
+        delete sanitizedPayload.offer;
+      }
+    }
+
+    if (requireAnswer) {
+      const answer = payload.answer;
+      if (
+        !answer ||
+        typeof answer !== 'object' ||
+        typeof answer.sdp !== 'string' ||
+        !answer.sdp.trim()
+      ) {
+        emitCallError('A valid call answer is required.');
+        return null;
+      }
+      const answerType =
+        typeof answer.type === 'string' && answer.type.trim() ? answer.type.trim() : 'answer';
+      sanitizedPayload.answer = { type: answerType, sdp: answer.sdp };
+    } else if ('answer' in sanitizedPayload) {
+      const answer = sanitizedPayload.answer;
+      if (!answer || typeof answer !== 'object' || typeof answer.sdp !== 'string') {
+        delete sanitizedPayload.answer;
+      }
+    }
+
+    if (requireCandidate) {
+      const candidate = payload.candidate;
+      if (!candidate || typeof candidate !== 'object') {
+        emitCallError('A valid call candidate is required.');
+        return null;
+      }
+      const candidateString =
+        typeof candidate.candidate === 'string' && candidate.candidate.trim()
+          ? candidate.candidate.trim()
+          : null;
+      if (!candidateString) {
+        emitCallError('A valid call candidate is required.');
+        return null;
+      }
+      sanitizedPayload.candidate = { ...candidate, candidate: candidateString };
+    } else if ('candidate' in sanitizedPayload) {
+      const candidate = sanitizedPayload.candidate;
+      if (!candidate || typeof candidate !== 'object' || !candidate.candidate) {
+        delete sanitizedPayload.candidate;
+      }
+    }
+
+    socket.join(normalizedChatId);
+
+    return { payload: sanitizedPayload, recipients };
+  };
+
   socket.on('joinChat', async ({ chat_id: chatId }) => {
     if (!authenticatedUserId) {
       socket.emit('authError', { error: 'Authenticate before joining chats.' });
@@ -2047,6 +2246,62 @@ io.on('connection', (socket) => {
       });
     }
   );
+
+  socket.on('call:offer', async (payload) => {
+    const prepared = await prepareCallSignalPayload('call:offer', payload, {
+      requireOffer: true,
+      normalizeCallType: 'required',
+    });
+    if (!prepared) {
+      return;
+    }
+
+    emitCallEvent('call:offer', prepared.payload, prepared.recipients);
+  });
+
+  socket.on('call:answer', async (payload) => {
+    const prepared = await prepareCallSignalPayload('call:answer', payload, {
+      requireAnswer: true,
+    });
+    if (!prepared) {
+      return;
+    }
+
+    emitCallEvent('call:answer', prepared.payload, prepared.recipients);
+  });
+
+  socket.on('call:candidate', async (payload) => {
+    const prepared = await prepareCallSignalPayload('call:candidate', payload, {
+      requireCandidate: true,
+    });
+    if (!prepared) {
+      return;
+    }
+
+    emitCallEvent('call:candidate', prepared.payload, prepared.recipients);
+  });
+
+  socket.on('call:hangup', async (payload) => {
+    const prepared = await prepareCallSignalPayload('call:hangup', payload, {
+      normalizeCallType: true,
+    });
+    if (!prepared) {
+      return;
+    }
+
+    emitCallEvent('call:hangup', prepared.payload, prepared.recipients);
+  });
+
+  socket.on('call:decline', async (payload) => {
+    const prepared = await prepareCallSignalPayload('call:decline', payload, {
+      normalizeCallType: true,
+    });
+    if (!prepared) {
+      return;
+    }
+
+    emitCallEvent('call:decline', prepared.payload, prepared.recipients);
+  });
 
   socket.on('typing', ({ chat_id: chatId, isTyping }) => {
     if (!authenticatedUserId) return;
