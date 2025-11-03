@@ -3882,6 +3882,70 @@ function handleRealtimeChatError(payload) {
   });
 }
 
+// Some call offers may arrive before the associated conversation has been hydrated
+// locally. Create a lightweight placeholder so the UI can render the incoming call
+// overlay while we fetch the full chat details in the background.
+function ensureChatForIncomingCall(
+  chatId,
+  { remoteAccountIds = [], remoteUserId = null, remoteUsername = null } = {}
+) {
+  const normalizedChatId = normalizeChatIdentifier(chatId);
+  if (!normalizedChatId) {
+    return null;
+  }
+
+  const existingChat = getChatById(normalizedChatId);
+  if (existingChat) {
+    return existingChat;
+  }
+
+  const accountIdCandidates = Array.isArray(remoteAccountIds)
+    ? remoteAccountIds.map((value) => normalizeAccountId(value)).filter(Boolean)
+    : [];
+  const normalizedRemoteId = normalizeAccountId(remoteUserId);
+  if (normalizedRemoteId && !accountIdCandidates.includes(normalizedRemoteId)) {
+    accountIdCandidates.unshift(normalizedRemoteId);
+  }
+
+  const placeholderContact = {};
+  if (accountIdCandidates.length) {
+    placeholderContact.accountId = accountIdCandidates[0];
+  }
+  if (typeof remoteUsername === "string" && remoteUsername.trim()) {
+    const trimmed = remoteUsername.trim();
+    placeholderContact.displayName = trimmed;
+    placeholderContact.nickname = trimmed;
+  }
+
+  let resolvedContact = null;
+  if (Object.keys(placeholderContact).length) {
+    const { contact: storedContact } = upsertContact(placeholderContact);
+    resolvedContact = storedContact ?? normalizeContact(placeholderContact);
+  }
+
+  const placeholderName =
+    (resolvedContact && (resolvedContact.displayName || resolvedContact.nickname)) ||
+    (typeof remoteUsername === "string" && remoteUsername.trim()) ||
+    "Incoming call";
+
+  const placeholderChat = normalizeChat({
+    id: normalizedChatId,
+    name: placeholderName,
+    type: ChatType.DIRECT,
+    messages: [],
+    contact: resolvedContact || undefined,
+  });
+
+  chats = [placeholderChat, ...chats];
+  saveState(chats);
+  renderChats(chatSearchInput.value);
+  // Proactively request the full chat history so the placeholder can be
+  // replaced with real metadata once it is available from the server.
+  joinChatRealtime(normalizedChatId);
+
+  return placeholderChat;
+}
+
 async function handleRealtimeCallOffer(payload) {
   if (!payload || typeof payload !== "object") {
     return;
@@ -3889,12 +3953,6 @@ async function handleRealtimeCallOffer(payload) {
 
   const chatId = normalizeChatIdentifier(payload.chat_id);
   if (!chatId) {
-    return;
-  }
-
-  const chat = getChatById(chatId);
-  if (!chat) {
-    console.warn("Incoming call for unknown chat", chatId);
     return;
   }
 
@@ -3910,20 +3968,29 @@ async function handleRealtimeCallOffer(payload) {
       ? payload.from_username.trim()
       : null;
 
+  const remoteAccountIds = [];
+  const normalizedRemote = normalizeAccountId(remoteUserId);
+  if (normalizedRemote) {
+    remoteAccountIds.push(normalizedRemote);
+  }
+
+  const chat = ensureChatForIncomingCall(chatId, {
+    remoteAccountIds,
+    remoteUserId,
+    remoteUsername,
+  });
+  if (!chat) {
+    console.warn("Incoming call for unknown chat", chatId);
+    return;
+  }
+
   if (activeCall && activeCall.state !== CallState.ENDED) {
-    const normalizedRemote = normalizeAccountId(remoteUserId);
     const declinePayload = { chat_id: chatId, reason: "User is busy" };
     if (normalizedRemote) {
       declinePayload.recipient_ids = [normalizedRemote];
     }
     sendCallSignal("call:decline", declinePayload);
     return;
-  }
-
-  const remoteAccountIds = [];
-  const normalizedRemote = normalizeAccountId(remoteUserId);
-  if (normalizedRemote) {
-    remoteAccountIds.push(normalizedRemote);
   }
 
   openCallOverlay({
@@ -8458,6 +8525,433 @@ function updateCallMediaVisibility() {
 
 function attachCallLocalStream(stream) {
   if (!activeCall) {
+    return;
+  }
+
+  activeCall.localStream = stream;
+
+  if (callOverlayLocalVideoElement) {
+    callOverlayLocalVideoElement.srcObject = stream;
+    callOverlayLocalVideoElement.muted = true;
+    callOverlayLocalVideoElement
+      .play()
+      .catch((_error) => {
+        // Autoplay restrictions are expected in some environments.
+      });
+  }
+
+  updateCallMediaVisibility();
+}
+
+function attachCallRemoteStream(stream) {
+  if (!activeCall) {
+    return;
+  }
+
+  activeCall.remoteStream = stream;
+
+  if (callOverlayRemoteVideoElement) {
+    callOverlayRemoteVideoElement.srcObject = stream;
+    callOverlayRemoteVideoElement.muted = false;
+    callOverlayRemoteVideoElement
+      .play()
+      .catch((_error) => {
+        // Autoplay restrictions are expected in some environments.
+      });
+  }
+
+  if (callOverlayRemoteAudioElement) {
+    callOverlayRemoteAudioElement.srcObject = stream;
+    callOverlayRemoteAudioElement.muted = false;
+    callOverlayRemoteAudioElement.volume = 0.85;
+    callOverlayRemoteAudioElement
+      .play()
+      .catch((_error) => {
+        // Autoplay restrictions are expected in some environments.
+      });
+  }
+
+  updateCallMediaVisibility();
+}
+
+function cleanupActiveCallResources() {
+  if (!activeCall) {
+    return;
+  }
+
+  if (callDisconnectWatcher) {
+    clearTimeout(callDisconnectWatcher);
+    callDisconnectWatcher = null;
+  }
+
+  if (activeCall.peerConnection) {
+    try {
+      activeCall.peerConnection.ontrack = null;
+      activeCall.peerConnection.onicecandidate = null;
+      activeCall.peerConnection.onconnectionstatechange = null;
+      activeCall.peerConnection.oniceconnectionstatechange = null;
+      activeCall.peerConnection.close();
+    } catch (error) {
+      console.error("Error closing call peer connection", error);
+    }
+    activeCall.peerConnection = null;
+  }
+
+  const stopTracks = (stream) => {
+    if (!stream) return;
+    stream.getTracks().forEach((track) => {
+      try {
+        track.stop();
+      } catch (_error) {
+        // Ignore errors when stopping tracks.
+      }
+    });
+  };
+
+  stopTracks(activeCall.localStream);
+  stopTracks(activeCall.remoteStream);
+
+  activeCall.localStream = null;
+  activeCall.remoteStream = null;
+
+  if (callOverlayLocalVideoElement) {
+    try {
+      callOverlayLocalVideoElement.pause();
+    } catch (_error) {
+      // Ignore pause errors.
+    }
+    callOverlayLocalVideoElement.srcObject = null;
+  }
+
+  if (callOverlayRemoteVideoElement) {
+    try {
+      callOverlayRemoteVideoElement.pause();
+    } catch (_error) {
+      // Ignore pause errors.
+    }
+    callOverlayRemoteVideoElement.srcObject = null;
+  }
+
+  if (callOverlayRemoteAudioElement) {
+    try {
+      callOverlayRemoteAudioElement.pause();
+    } catch (_error) {
+      // Ignore pause errors.
+    }
+    callOverlayRemoteAudioElement.srcObject = null;
+    callOverlayRemoteAudioElement.volume = 0.85;
+  }
+
+  activeCall.pendingCandidates = [];
+  activeCall.hasLocalDescription = false;
+  activeCall.hasRemoteDescription = false;
+
+  updateCallMediaVisibility();
+}
+
+function createPeerConnectionForActiveCall() {
+  if (!activeCall) {
+    return null;
+  }
+
+  let connection;
+  try {
+    connection = new RTCPeerConnection(DEFAULT_CALL_RTC_CONFIGURATION);
+  } catch (error) {
+    console.error("Failed to create peer connection", error);
+    showToast("Calling is not available in this browser.");
+    return null;
+  }
+
+  connection.onicecandidate = (event) => {
+    if (!event.candidate || !activeCall || activeCall.peerConnection !== connection) {
+      return;
+    }
+
+    const candidateInit =
+      typeof event.candidate.toJSON === "function"
+        ? event.candidate.toJSON()
+        : {
+            candidate: event.candidate.candidate,
+            sdpMid: event.candidate.sdpMid ?? null,
+            sdpMLineIndex: event.candidate.sdpMLineIndex ?? null,
+          };
+
+    const payload = {
+      chat_id: activeCall.chatId,
+      candidate: candidateInit,
+    };
+    if (Array.isArray(activeCall.remoteAccountIds) && activeCall.remoteAccountIds.length) {
+      payload.recipient_ids = activeCall.remoteAccountIds;
+    }
+
+    sendCallSignal("call:candidate", payload);
+  };
+
+  connection.ontrack = (event) => {
+    if (!event || !event.streams || !event.streams.length) {
+      return;
+    }
+    const [stream] = event.streams;
+    if (stream) {
+      attachCallRemoteStream(stream);
+    }
+  };
+
+  connection.onconnectionstatechange = () => {
+    if (!activeCall || activeCall.peerConnection !== connection) {
+      return;
+    }
+    switch (connection.connectionState) {
+      case "connected": {
+        if (callDisconnectWatcher) {
+          clearTimeout(callDisconnectWatcher);
+          callDisconnectWatcher = null;
+        }
+        markActiveCallConnected();
+        break;
+      }
+      case "disconnected": {
+        if (callDisconnectWatcher) {
+          clearTimeout(callDisconnectWatcher);
+        }
+        callDisconnectWatcher = window.setTimeout(() => {
+          if (
+            activeCall &&
+            activeCall.peerConnection === connection &&
+            connection.connectionState === "disconnected"
+          ) {
+            endActiveCall({ reason: "Call disconnected", suppressToast: false, signalRemote: false });
+          }
+        }, 2000);
+        break;
+      }
+      case "failed": {
+        endActiveCall({ reason: "Call connection failed", suppressToast: false, signalRemote: false });
+        break;
+      }
+      default:
+        break;
+    }
+  };
+
+  connection.oniceconnectionstatechange = () => {
+    if (!activeCall || activeCall.peerConnection !== connection) {
+      return;
+    }
+    if (connection.iceConnectionState === "failed") {
+      endActiveCall({ reason: "Call connection failed", suppressToast: false, signalRemote: false });
+    }
+  };
+
+  return connection;
+}
+
+function flushPendingCallCandidates() {
+  if (!activeCall || !activeCall.peerConnection || !Array.isArray(activeCall.pendingCandidates)) {
+    return;
+  }
+
+  const queue = activeCall.pendingCandidates.splice(0);
+  queue.forEach((candidateInit) => {
+    if (!candidateInit || !candidateInit.candidate) {
+      return;
+    }
+    try {
+      activeCall.peerConnection.addIceCandidate(new RTCIceCandidate(candidateInit));
+    } catch (error) {
+      console.error("Failed to apply call candidate", error);
+    }
+  });
+}
+
+function markActiveCallConnected() {
+  if (!activeCall) {
+    return;
+  }
+
+  if (!activeCall.startedAt) {
+    activeCall.startedAt = Date.now();
+  }
+
+  setActiveCallState(CallState.CONNECTED);
+  updateCallOverlayTimer();
+  if (callTimerInterval) {
+    clearInterval(callTimerInterval);
+  }
+  callTimerInterval = window.setInterval(updateCallOverlayTimer, 1000);
+}
+
+function sendCallSignal(eventName, payload) {
+  if (!eventName || !payload) {
+    return false;
+  }
+  const socket = realtimeState.socket;
+  if (!socket || !socket.connected || !realtimeState.isAuthenticated) {
+    return false;
+  }
+  try {
+    socket.emit(eventName, payload);
+    return true;
+  } catch (error) {
+    console.error("Failed to send call signal", error);
+    return false;
+  }
+}
+
+async function acceptIncomingCall() {
+  if (
+    !activeCall ||
+    activeCall.direction !== "incoming" ||
+    !window.RTCPeerConnection ||
+    !navigator.mediaDevices ||
+    typeof navigator.mediaDevices.getUserMedia !== "function"
+  ) {
+    if (!activeCall) {
+      return;
+    }
+    showToast("Calling requires a browser that supports WebRTC.");
+    return;
+  }
+
+  const chat = getChatById(activeCall.chatId);
+  if (!chat) {
+    showToast("Chat no longer available.");
+    declineIncomingCall({ notifyRemote: true });
+    return;
+  }
+
+  const offer = activeCall.offer;
+  if (!offer || typeof offer.sdp !== "string") {
+    showToast("Call offer is no longer available.");
+    declineIncomingCall({ notifyRemote: true });
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: activeCall.type === CallType.VIDEO,
+    });
+    if (!activeCall || activeCall.direction !== "incoming") {
+      stream.getTracks().forEach((track) => {
+        try {
+          track.stop();
+        } catch (_error) {}
+      });
+      return;
+    }
+
+    attachCallLocalStream(stream);
+
+    const peerConnection = createPeerConnectionForActiveCall();
+    if (!peerConnection) {
+      stream.getTracks().forEach((track) => {
+        try {
+          track.stop();
+        } catch (_error) {}
+      });
+      declineIncomingCall({ notifyRemote: true });
+      return;
+    }
+
+    activeCall.peerConnection = peerConnection;
+
+    stream.getTracks().forEach((track) => {
+      try {
+        peerConnection.addTrack(track, stream);
+      } catch (error) {
+        console.error("Failed to add local track to call", error);
+      }
+    });
+
+    await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+    activeCall.hasRemoteDescription = true;
+    flushPendingCallCandidates();
+
+    const answer = await peerConnection.createAnswer();
+    await peerConnection.setLocalDescription(answer);
+    activeCall.hasLocalDescription = true;
+
+    const payload = {
+      chat_id: activeCall.chatId,
+      answer: { type: answer.type, sdp: answer.sdp },
+    };
+    if (Array.isArray(activeCall.remoteAccountIds) && activeCall.remoteAccountIds.length) {
+      payload.recipient_ids = activeCall.remoteAccountIds;
+    }
+    sendCallSignal("call:answer", payload);
+    setActiveCallState(CallState.CONNECTING);
+  } catch (error) {
+    console.error("Failed to accept call", error);
+    showToast("Unable to join the call.");
+    endActiveCall({ reason: "Call unavailable", suppressToast: true, signalRemote: true });
+  }
+}
+
+function declineIncomingCall({ notifyRemote = true, reason = "Call declined" } = {}) {
+  if (!activeCall) {
+    closeCallOverlay({ restoreFocus: true });
+    return;
+  }
+
+  if (notifyRemote && activeCall.chatId) {
+    const payload = { chat_id: activeCall.chatId };
+    if (reason) {
+      payload.reason = reason;
+    }
+    if (Array.isArray(activeCall.remoteAccountIds) && activeCall.remoteAccountIds.length) {
+      payload.recipient_ids = activeCall.remoteAccountIds;
+    }
+    sendCallSignal("call:decline", payload);
+  }
+
+  closeCallOverlay({ restoreFocus: true });
+}
+
+function getParticipantInitials(name) {
+  if (typeof name !== "string") {
+    return "??";
+  }
+  const trimmed = name.trim();
+  if (!trimmed) {
+    return "??";
+  }
+  const parts = trimmed.split(/\s+/).filter(Boolean);
+  if (!parts.length) {
+    return trimmed.slice(0, 2).toUpperCase();
+  }
+  if (parts.length === 1) {
+    const word = parts[0];
+    const first = word.charAt(0);
+    const second = word.charAt(1);
+    const initials = `${first}${second}`.trim().toUpperCase();
+    return initials || word.slice(0, 2).toUpperCase();
+  }
+  const first = parts[0].charAt(0);
+  const last = parts[parts.length - 1].charAt(0);
+  const initials = `${first}${last}`.trim().toUpperCase();
+  return initials || trimmed.slice(0, 2).toUpperCase();
+}
+
+function renderCallOverlayParticipants(participants) {
+  if (!callOverlayParticipantsElement) return;
+
+  callOverlayParticipantsElement.innerHTML = "";
+  callOverlayParticipantsElement.removeAttribute("aria-label");
+
+  const normalized = Array.isArray(participants)
+    ? participants
+        .map((value) => (typeof value === "string" ? value.trim() : ""))
+        .filter(Boolean)
+    : [];
+
+  if (!normalized.length) {
+    const empty = document.createElement("div");
+    empty.className = "call-overlay__participants-empty";
+    empty.textContent = "No participants available";
+    callOverlayParticipantsElement.appendChild(empty);
+    callOverlayParticipantsElement.setAttribute("aria-hidden", "false");
     return;
   }
 
