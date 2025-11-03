@@ -84,6 +84,7 @@ function createInMemoryStore() {
   const usersById = new Map();
   const messagesByChatId = new Map();
   const chatWallpapers = new Map();
+  const chatParticipants = new Map();
 
   return {
     insertUser({ username, passwordHash, isAdmin = false }) {
@@ -229,9 +230,42 @@ function createInMemoryStore() {
       }
       return chatWallpapers.get(normalizedId) ?? null;
     },
+    setChatParticipants(chatId, { participants, participantAccountIds }) {
+      const normalizedId = normalizeChatId(chatId);
+      if (!normalizedId) {
+        return { participants: [], participantAccountIds: [] };
+      }
+
+      const names = normalizeParticipantNames(participants);
+      const accountIds = normalizeParticipantAccountIds(participantAccountIds);
+
+      if (!names.length && !accountIds.length) {
+        chatParticipants.delete(normalizedId);
+        return { participants: [], participantAccountIds: [] };
+      }
+
+      const record = { participants: names, participantAccountIds: accountIds };
+      chatParticipants.set(normalizedId, record);
+      return { ...record };
+    },
+    getChatParticipants(chatId) {
+      const normalizedId = normalizeChatId(chatId);
+      if (!normalizedId) {
+        return { participants: [], participantAccountIds: [] };
+      }
+      const record = chatParticipants.get(normalizedId);
+      if (!record) {
+        return { participants: [], participantAccountIds: [] };
+      }
+      return {
+        participants: Array.from(record.participants ?? []),
+        participantAccountIds: Array.from(record.participantAccountIds ?? []),
+      };
+    },
     purgeDatabase({ removeUsers = false } = {}) {
       messagesByChatId.clear();
       chatWallpapers.clear();
+      chatParticipants.clear();
       if (!removeUsers) {
         return;
       }
@@ -265,6 +299,7 @@ const inMemoryStore = createInMemoryStore();
 let pool = null;
 
 const chatWallpaperPreferences = new Map();
+const chatParticipantsMetadata = new Map();
 
 function normalizeWallpaperValue(value) {
   if (typeof value !== 'string') {
@@ -312,6 +347,53 @@ function setChatWallpaperPreference(chatId, wallpaper) {
   }
 
   return normalizedWallpaper;
+}
+
+function getChatParticipantsPreference(chatId) {
+  const normalizedChatId = normalizeChatId(chatId);
+  if (!normalizedChatId) {
+    return { participants: [], participantAccountIds: [] };
+  }
+
+  if (useInMemoryStore || !pool) {
+    return inMemoryStore.getChatParticipants(normalizedChatId);
+  }
+
+  const record = chatParticipantsMetadata.get(normalizedChatId);
+  if (!record) {
+    return { participants: [], participantAccountIds: [] };
+  }
+
+  return {
+    participants: Array.from(record.participants ?? []),
+    participantAccountIds: Array.from(record.participantAccountIds ?? []),
+  };
+}
+
+function setChatParticipantsPreference(chatId, { participants, participantAccountIds }) {
+  const normalizedChatId = normalizeChatId(chatId);
+  if (!normalizedChatId) {
+    return { participants: [], participantAccountIds: [] };
+  }
+
+  const names = normalizeParticipantNames(participants);
+  const ids = normalizeParticipantAccountIds(participantAccountIds);
+
+  if (useInMemoryStore || !pool) {
+    return inMemoryStore.setChatParticipants(normalizedChatId, {
+      participants: names,
+      participantAccountIds: ids,
+    });
+  }
+
+  if (!names.length && !ids.length) {
+    chatParticipantsMetadata.delete(normalizedChatId);
+    return { participants: [], participantAccountIds: [] };
+  }
+
+  const record = { participants: names, participantAccountIds: ids };
+  chatParticipantsMetadata.set(normalizedChatId, record);
+  return { ...record };
 }
 
 if (useInMemoryStore) {
@@ -502,6 +584,55 @@ function normalizeMessageId(value) {
     return value.toString();
   }
   return null;
+}
+
+function normalizeParticipantNames(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  const seen = new Set();
+  const names = [];
+  values.forEach((value) => {
+    if (typeof value !== 'string') {
+      return;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return;
+    }
+    const normalized = trimmed.replace(/\s+/g, ' ');
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    names.push(normalized.slice(0, 120));
+  });
+  return names.slice(0, 75);
+}
+
+function normalizeParticipantAccountIds(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  const seen = new Set();
+  const ids = [];
+  values.forEach((value) => {
+    if (value === null || value === undefined) {
+      return;
+    }
+    const text = typeof value === 'string' ? value.trim() : String(value);
+    if (!text) {
+      return;
+    }
+    const key = text.toLowerCase();
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    ids.push(text.slice(0, 160));
+  });
+  return ids.slice(0, 75);
 }
 
 const MAX_READ_RECEIPTS_PER_CHAT = 500;
@@ -1048,6 +1179,7 @@ async function purgeDatabase({ removeUsers = false } = {}) {
   if (useInMemoryStore || !pool) {
     inMemoryStore.purgeDatabase({ removeUsers });
     messageReadReceipts.clear();
+    chatParticipantsMetadata.clear();
     return { messagesDeleted: null, usersDeleted: null };
   }
 
@@ -1064,12 +1196,14 @@ async function purgeDatabase({ removeUsers = false } = {}) {
     }
     await client.query('COMMIT');
     messageReadReceipts.clear();
+    chatParticipantsMetadata.clear();
     return { messagesDeleted: messageResult.rowCount, usersDeleted: userResult.rowCount };
   } catch (error) {
     await client.query('ROLLBACK');
     if (enableInMemoryFallback(error)) {
       inMemoryStore.purgeDatabase({ removeUsers });
       messageReadReceipts.clear();
+      chatParticipantsMetadata.clear();
       return { messagesDeleted: null, usersDeleted: null };
     }
     throw error;
@@ -1656,7 +1790,14 @@ io.on('connection', (socket) => {
       socket.join(normalizedChatId);
       const messages = await fetchRecentMessages(normalizedChatId);
       const wallpaper = getChatWallpaperPreference(normalizedChatId);
-      socket.emit('chatHistory', { chat_id: normalizedChatId, messages, wallpaper });
+      const participantState = getChatParticipantsPreference(normalizedChatId);
+      socket.emit('chatHistory', {
+        chat_id: normalizedChatId,
+        messages,
+        wallpaper,
+        participants: participantState.participants,
+        participant_account_ids: participantState.participantAccountIds,
+      });
     } catch (error) {
       console.error('Error joining chat', error);
       socket.emit('chatError', { error: 'Failed to join chat.' });
@@ -1842,6 +1983,70 @@ io.on('connection', (socket) => {
       });
     }
   });
+
+  socket.on(
+    'chatParticipantsUpdate',
+    async ({ chat_id: chatId, participants, participant_account_ids: participantAccountIds }) => {
+      if (!authenticatedUserId) {
+        socket.emit('authError', { error: 'Authenticate before updating participants.' });
+        return;
+      }
+
+      const normalizedChatId = normalizeChatId(chatId);
+      if (!normalizedChatId) {
+        socket.emit('chatError', { error: 'chat_id is required to update participants.' });
+        return;
+      }
+
+      const stored = setChatParticipantsPreference(normalizedChatId, {
+        participants,
+        participantAccountIds,
+      });
+
+      let senderUsername = null;
+      try {
+        const senderRecord = await findUserById(authenticatedUserId);
+        if (!senderRecord) {
+          socket.emit('authError', { error: 'Account no longer exists.' });
+          removeSocketForUser(authenticatedUserId, socket.id);
+          authenticatedUserId = null;
+          return;
+        }
+        senderUsername = senderRecord.username || null;
+      } catch (error) {
+        console.error('Failed to verify sender before updating participants', error);
+        socket.emit('authError', { error: 'Authentication error.' });
+        return;
+      }
+
+      socket.join(normalizedChatId);
+
+      const payload = {
+        chat_id: normalizedChatId,
+        participants: stored.participants,
+        participant_account_ids: stored.participantAccountIds,
+        updated_by: authenticatedUserId,
+      };
+      if (senderUsername) {
+        payload.updated_by_username = senderUsername;
+      }
+
+      io.to(normalizedChatId).emit('chatParticipantsUpdate', payload);
+
+      const summary = senderUsername
+        ? `${senderUsername} updated participants for chat ${normalizedChatId}.`
+        : `Participants updated for chat ${normalizedChatId}.`;
+      recordActivity({
+        type: 'chat:participants_updated',
+        summary,
+        details: {
+          chatId: normalizedChatId,
+          updatedBy: authenticatedUserId,
+          participantCount: stored.participants.length,
+        },
+      });
+    }
+  );
 
   socket.on('typing', ({ chat_id: chatId, isTyping }) => {
     if (!authenticatedUserId) return;
