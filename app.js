@@ -109,13 +109,6 @@ const voiceRecorderCancelButton = document.getElementById("voice-recorder-cancel
 const voiceRecorderSendButton = document.getElementById("voice-recorder-send");
 const startAudioCallButton = document.getElementById("start-audio-call");
 const startVideoCallButton = document.getElementById("start-video-call");
-const startPhoneCallButton = document.getElementById("start-phone-call");
-const callPlanModal = document.getElementById("call-plan-modal");
-const callPlanForm = document.getElementById("call-plan-form");
-const callPlanCloseButton = document.getElementById("call-plan-close");
-const callPlanCancelButton = document.getElementById("call-plan-cancel");
-const callPlanSummaryElement = document.getElementById("call-plan-summary");
-const callPlanConfirmButton = document.getElementById("call-plan-confirm");
 const chatWallpaperModal = document.getElementById("chat-wallpaper-modal");
 const chatWallpaperCloseButton = document.getElementById("chat-wallpaper-close");
 const chatWallpaperForm = document.getElementById("chat-wallpaper-form");
@@ -135,7 +128,7 @@ const callOverlayElement = document.getElementById("call-overlay");
 const callOverlayBackdrop = document.getElementById("call-overlay-backdrop");
 const callOverlayCloseButton = document.getElementById("call-overlay-close");
 const callOverlayTypeElement = document.getElementById("call-overlay-type");
-const callOverlayAvatarElement = document.getElementById("call-overlay-avatar");
+const callOverlayParticipantsElement = document.getElementById("call-overlay-participants");
 const callOverlayNameElement = document.getElementById("call-overlay-name");
 const callOverlayStatusElement = document.getElementById("call-overlay-status");
 const callOverlayControlButtons = Array.from(
@@ -387,7 +380,6 @@ const ChatType = {
 const CallType = {
   AUDIO: "audio",
   VIDEO: "video",
-  PHONE: "phone",
 };
 
 const AuthView = {
@@ -398,17 +390,6 @@ const AuthView = {
 const CALL_TYPE_LABELS = {
   [CallType.AUDIO]: "Audio call",
   [CallType.VIDEO]: "Video call",
-  [CallType.PHONE]: "Phone call",
-};
-
-const CALL_PLAN_SUMMARIES = {
-  standard: "Unlimited domestic calling, HD audio quality.",
-  pro: "Global calling bundle, voicemail transcription, call analytics.",
-};
-
-const CALL_PLAN_LABELS = {
-  standard: "Standard plan",
-  pro: "Pro plan",
 };
 
 const CONTACT_STATUS_MAX_LENGTH = 140;
@@ -4845,9 +4826,6 @@ function resetAppDataToDefaults({ auth, removeStoredData = true } = {}) {
   if (newContactModal && !newContactModal.hidden) {
     closeNewContactModal();
   }
-  if (callPlanModal && !callPlanModal.hidden) {
-    closeCallPlanModal();
-  }
   if (callOverlayElement && !callOverlayElement.hidden) {
     endActiveCall({ reason: "Signed out" });
   }
@@ -6221,9 +6199,6 @@ function updateCallControls(chat) {
   const hasChat = Boolean(chat);
   const audioEnabled = hasChat && capabilities.audio !== false;
   const videoEnabled = hasChat && capabilities.video !== false;
-  const phoneEnabled =
-    hasChat && type !== ChatType.GROUP && capabilities.phone === true;
-
   if (startAudioCallButton) {
     startAudioCallButton.disabled = !audioEnabled;
     startAudioCallButton.setAttribute(
@@ -6248,23 +6223,6 @@ function updateCallControls(chat) {
       : hasChat
       ? "Video calling unavailable"
       : "Select a chat to start a video call";
-  }
-
-  if (startPhoneCallButton) {
-    startPhoneCallButton.disabled = !phoneEnabled;
-    startPhoneCallButton.setAttribute(
-      "aria-disabled",
-      phoneEnabled ? "false" : "true"
-    );
-    let title = "Start direct phone call";
-    if (!hasChat) {
-      title = "Select a chat to place a phone call";
-    } else if (type === ChatType.GROUP) {
-      title = "Direct phone calls are only available in 1:1 chats";
-    } else if (!phoneEnabled) {
-      title = "Direct phone calls unavailable";
-    }
-    startPhoneCallButton.title = title;
   }
 }
 
@@ -6335,6 +6293,36 @@ function getManageableParticipantNames(chat) {
   }
 
   return [];
+}
+
+function getCallParticipantNames(chat) {
+  if (!chat) {
+    return [];
+  }
+
+  if (chat.type === ChatType.GROUP) {
+    const groupParticipants = normalizeGroupParticipants(chat.participants);
+    const list = [...groupParticipants];
+    const selfName = getSelfParticipantName();
+    if (selfName) {
+      const normalizedSelf = selfName.trim();
+      if (
+        normalizedSelf &&
+        !list.some((name) => name.toLowerCase() === normalizedSelf.toLowerCase())
+      ) {
+        list.unshift(normalizedSelf);
+      }
+    }
+    if (!list.length) {
+      const fallback = typeof chat.name === "string" ? chat.name.trim() : "";
+      if (fallback) {
+        list.push(fallback);
+      }
+    }
+    return normalizeGroupParticipants(list);
+  }
+
+  return getDirectChatParticipants(chat);
 }
 
 function renderChatParticipants(chat) {
@@ -7830,104 +7818,6 @@ function resetVoiceRecorder() {
   stopVoiceRecorder({ send: false, suppressToast: true });
 }
 
-function updateCallPlanSummary(plan) {
-  if (!callPlanSummaryElement) return;
-  const summary = CALL_PLAN_SUMMARIES[plan] ?? CALL_PLAN_SUMMARIES.standard;
-  callPlanSummaryElement.textContent = summary;
-}
-
-function openCallPlanModal() {
-  if (!callPlanModal || !callPlanForm) return;
-  const chat = getActiveChat();
-  if (!chat) {
-    showToast("Select a chat to place a phone call");
-    return;
-  }
-  if (chat.type === ChatType.GROUP) {
-    showToast("Direct phone calls are only available in 1:1 chats");
-    return;
-  }
-  if (!callPlanModal.hidden) return;
-
-  if (profileModal && !profileModal.hidden) {
-    closeProfile({ restoreFocus: false });
-  }
-  if (settingsModal && !settingsModal.hidden) {
-    closeSettings({ restoreFocus: false });
-  }
-
-  callPlanRestoreFocusTo =
-    document.activeElement instanceof HTMLElement ? document.activeElement : startPhoneCallButton;
-
-  const selectedPlanInput = callPlanForm.querySelector('input[name="call-plan"]:checked');
-  const selectedPlan = selectedPlanInput instanceof HTMLInputElement ? selectedPlanInput.value : "standard";
-  updateCallPlanSummary(selectedPlan);
-
-  callPlanModal.hidden = false;
-  document.body.classList.add("modal-open");
-
-  if (selectedPlanInput instanceof HTMLInputElement) {
-    selectedPlanInput.focus();
-  }
-}
-
-function closeCallPlanModal({ restoreFocus = true } = {}) {
-  if (!callPlanModal || callPlanModal.hidden) return;
-
-  callPlanModal.hidden = true;
-  if (
-    (!newContactModal || newContactModal.hidden) &&
-    (!profileModal || profileModal.hidden) &&
-    (!settingsModal || settingsModal.hidden)
-  ) {
-    document.body.classList.remove("modal-open");
-  }
-
-  const restoreTarget = callPlanRestoreFocusTo;
-  callPlanRestoreFocusTo = null;
-
-  if (restoreFocus && restoreTarget instanceof HTMLElement) {
-    restoreTarget.focus();
-  }
-}
-
-function trapCallPlanFocus(event) {
-  if (!callPlanModal || callPlanModal.hidden) return;
-  if (event.key !== "Tab") return;
-
-  const focusableSelectors =
-    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-  const focusable = Array.from(callPlanModal.querySelectorAll(focusableSelectors)).filter(
-    (element) =>
-      element instanceof HTMLElement &&
-      !element.hasAttribute("data-close-modal") &&
-      element.offsetParent !== null
-  );
-
-  if (!focusable.length) return;
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-
-  if (event.shiftKey) {
-    if (document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    }
-  } else if (document.activeElement === last) {
-    event.preventDefault();
-    first.focus();
-  }
-}
-
-function handleCallPlanSubmit(event) {
-  event.preventDefault();
-  if (!callPlanForm) return;
-  const formData = new FormData(callPlanForm);
-  const selectedPlan = (formData.get("call-plan") || "standard").toString();
-  closeCallPlanModal({ restoreFocus: false });
-  startCall(CallType.PHONE, { plan: selectedPlan });
-}
-
 function populateChatWallpaperForm(chat) {
   if (!chatWallpaperForm) return;
   const override = chat ? getChatWallpaperOverride(chat.id) : null;
@@ -7985,8 +7875,7 @@ function closeChatWallpaperModal({ restoreFocus = true } = {}) {
   if (
     (!newContactModal || newContactModal.hidden) &&
     (!profileModal || profileModal.hidden) &&
-    (!settingsModal || settingsModal.hidden) &&
-    (!callPlanModal || callPlanModal.hidden)
+    (!settingsModal || settingsModal.hidden)
   ) {
     document.body.classList.remove("modal-open");
   }
@@ -8067,7 +7956,7 @@ function handleChatWallpaperUseDefault(event) {
   closeChatWallpaperModal();
 }
 
-function startCall(callType, { plan = null } = {}) {
+function startCall(callType) {
   const chat = getActiveChat();
   if (!chat) {
     showToast("Select a chat to start a call");
@@ -8083,18 +7972,7 @@ function startCall(callType, { plan = null } = {}) {
     showToast("Video calling unavailable for this chat");
     return;
   }
-  if (callType === CallType.PHONE) {
-    if (chat.type === ChatType.GROUP) {
-      showToast("Direct phone calls are only available in 1:1 chats");
-      return;
-    }
-    if (capabilities.phone !== true) {
-      showToast("Direct phone calls unavailable");
-      return;
-    }
-  }
-
-  openCallOverlay({ chat, type: callType, plan });
+  openCallOverlay({ chat, type: callType });
 }
 
 function updateCallOverlayTimer() {
@@ -8107,7 +7985,77 @@ function updateCallOverlayTimer() {
   callOverlayStatusElement.textContent = `Call in progress · ${formatVoiceDuration(elapsed)}`;
 }
 
-function openCallOverlay({ chat, type, plan = null }) {
+function getParticipantInitials(name) {
+  if (typeof name !== "string") {
+    return "??";
+  }
+  const trimmed = name.trim();
+  if (!trimmed) {
+    return "??";
+  }
+  const parts = trimmed.split(/\s+/).filter(Boolean);
+  if (!parts.length) {
+    return trimmed.slice(0, 2).toUpperCase();
+  }
+  if (parts.length === 1) {
+    const word = parts[0];
+    const first = word.charAt(0);
+    const second = word.charAt(1);
+    const initials = `${first}${second}`.trim().toUpperCase();
+    return initials || word.slice(0, 2).toUpperCase();
+  }
+  const first = parts[0].charAt(0);
+  const last = parts[parts.length - 1].charAt(0);
+  const initials = `${first}${last}`.trim().toUpperCase();
+  return initials || trimmed.slice(0, 2).toUpperCase();
+}
+
+function renderCallOverlayParticipants(participants) {
+  if (!callOverlayParticipantsElement) return;
+
+  callOverlayParticipantsElement.innerHTML = "";
+  callOverlayParticipantsElement.removeAttribute("aria-label");
+
+  const normalized = Array.isArray(participants)
+    ? participants
+        .map((value) => (typeof value === "string" ? value.trim() : ""))
+        .filter(Boolean)
+    : [];
+
+  if (!normalized.length) {
+    const empty = document.createElement("div");
+    empty.className = "call-overlay__participants-empty";
+    empty.textContent = "No participants available";
+    callOverlayParticipantsElement.appendChild(empty);
+    callOverlayParticipantsElement.setAttribute("aria-hidden", "false");
+    return;
+  }
+
+  callOverlayParticipantsElement.setAttribute(
+    "aria-label",
+    `${normalized.length} participant${normalized.length === 1 ? "" : "s"} in call`
+  );
+  callOverlayParticipantsElement.setAttribute("aria-hidden", "false");
+
+  normalized.forEach((name) => {
+    const item = document.createElement("div");
+    item.className = "call-overlay__participant";
+    item.setAttribute("role", "listitem");
+
+    const avatar = document.createElement("div");
+    avatar.className = "call-overlay__participant-avatar";
+    avatar.textContent = getParticipantInitials(name);
+
+    const label = document.createElement("div");
+    label.className = "call-overlay__participant-name";
+    label.textContent = name;
+
+    item.append(avatar, label);
+    callOverlayParticipantsElement.appendChild(item);
+  });
+}
+
+function openCallOverlay({ chat, type }) {
   if (!callOverlayElement) return;
   if (callTimerInterval) {
     clearInterval(callTimerInterval);
@@ -8118,10 +8066,12 @@ function openCallOverlay({ chat, type, plan = null }) {
     callConnectionTimeout = null;
   }
 
+  const participants = getCallParticipantNames(chat);
+
   activeCall = {
     chatId: chat.id,
     type,
-    plan,
+    participants,
     startedAt: null,
   };
 
@@ -8133,19 +8083,23 @@ function openCallOverlay({ chat, type, plan = null }) {
   });
 
   const typeLabel = CALL_TYPE_LABELS[type] ?? "Call";
-  const planLabel = plan && CALL_PLAN_LABELS[plan] ? ` — ${CALL_PLAN_LABELS[plan]}` : "";
+  const participantCountLabel = participants.length
+    ? ` · ${participants.length} participant${participants.length === 1 ? "" : "s"}`
+    : "";
   if (callOverlayTypeElement) {
-    callOverlayTypeElement.textContent = `${typeLabel}${planLabel}`;
-  }
-  if (callOverlayAvatarElement) {
-    callOverlayAvatarElement.textContent = chat.avatar ?? chat.name.slice(0, 2).toUpperCase();
+    callOverlayTypeElement.textContent = `${typeLabel}${participantCountLabel}`;
   }
   if (callOverlayNameElement) {
-    callOverlayNameElement.textContent = chat.name;
+    const chatName = typeof chat.name === "string" && chat.name.trim()
+      ? chat.name.trim()
+      : participants[0] ?? "Call";
+    callOverlayNameElement.textContent = chatName;
   }
   if (callOverlayStatusElement) {
     callOverlayStatusElement.textContent = "Connecting…";
   }
+
+  renderCallOverlayParticipants(participants);
 
   callOverlayRestoreFocusTo =
     document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -8184,6 +8138,12 @@ function closeCallOverlay({ restoreFocus = true, showToastMessage } = {}) {
       button.setAttribute("aria-pressed", "false");
     }
   });
+
+  if (callOverlayParticipantsElement) {
+    callOverlayParticipantsElement.innerHTML = "";
+    callOverlayParticipantsElement.removeAttribute("aria-label");
+    callOverlayParticipantsElement.removeAttribute("aria-hidden");
+  }
 
   const restoreTarget = callOverlayRestoreFocusTo;
   callOverlayRestoreFocusTo = null;
@@ -9832,7 +9792,6 @@ let voiceRecorderLastDuration = 0;
 let activeCall = null;
 let callTimerInterval = null;
 let callConnectionTimeout = null;
-let callPlanRestoreFocusTo = null;
 let callOverlayRestoreFocusTo = null;
 let chatWallpaperRestoreFocusTo = null;
 
@@ -10612,33 +10571,6 @@ function hydrate() {
   if (startVideoCallButton) {
     startVideoCallButton.addEventListener("click", () => startCall(CallType.VIDEO));
   }
-  if (startPhoneCallButton) {
-    startPhoneCallButton.addEventListener("click", openCallPlanModal);
-  }
-  if (callPlanForm) {
-    callPlanForm.addEventListener("submit", handleCallPlanSubmit);
-    callPlanForm.addEventListener("change", (event) => {
-      const target = event.target;
-      if (target instanceof HTMLInputElement && target.name === "call-plan") {
-        updateCallPlanSummary(target.value);
-      }
-    });
-  }
-  if (callPlanCloseButton) {
-    callPlanCloseButton.addEventListener("click", () => closeCallPlanModal());
-  }
-  if (callPlanCancelButton) {
-    callPlanCancelButton.addEventListener("click", () => closeCallPlanModal());
-  }
-  if (callPlanModal) {
-    callPlanModal.addEventListener("click", (event) => {
-      const target = event.target;
-      if (target instanceof HTMLElement && target.hasAttribute("data-close-modal")) {
-        closeCallPlanModal();
-      }
-    });
-    callPlanModal.addEventListener("keydown", trapCallPlanFocus);
-  }
   if (callOverlayCloseButton) {
     callOverlayCloseButton.addEventListener("click", () => {
       endActiveCall({ reason: "Call ended" });
@@ -10741,12 +10673,6 @@ function hydrate() {
     if (profileModal && !profileModal.hidden) {
       event.preventDefault();
       closeProfile();
-      return;
-    }
-
-    if (callPlanModal && !callPlanModal.hidden) {
-      event.preventDefault();
-      closeCallPlanModal();
       return;
     }
 
