@@ -143,6 +143,9 @@ const callOverlayLocalVideoElement = document.getElementById("call-local-video")
 const callOverlayLocalVideoWrapper = document.getElementById(
   "call-local-video-wrapper"
 );
+const callOverlayLocalVideoPlaceholder = document.getElementById(
+  "call-local-video-placeholder"
+);
 const callOverlayRemoteVideoElement = document.getElementById("call-remote-video");
 const callOverlayRemoteVideoWrapper = document.getElementById(
   "call-remote-video-wrapper"
@@ -8649,6 +8652,28 @@ function updateCallOverlayState() {
       if (!enable) {
         button.setAttribute("aria-pressed", "false");
       }
+    } else if (action === "camera") {
+      const hasVideoCall = activeCall.type === CallType.VIDEO;
+      const localStream = hasVideoCall ? activeCall.localStream ?? null : null;
+      const videoTracks =
+        localStream && typeof localStream.getVideoTracks === "function"
+          ? localStream.getVideoTracks()
+          : [];
+      const hasVideoTracks = hasVideoCall && videoTracks.length > 0;
+      const canToggle = hasVideoTracks && state !== CallState.ENDED;
+      button.disabled = !canToggle;
+      button.setAttribute("aria-disabled", canToggle ? "false" : "true");
+      if (!canToggle) {
+        button.setAttribute("aria-pressed", "false");
+        button.textContent = "Camera on";
+      } else {
+        const cameraEnabled =
+          activeCall.isCameraEnabled !== false &&
+          videoTracks.some((track) => track.enabled !== false);
+        const pressed = !cameraEnabled;
+        button.setAttribute("aria-pressed", pressed ? "true" : "false");
+        button.textContent = pressed ? "Camera off" : "Camera on";
+      }
     } else if (action === "end") {
       const canEnd = state !== CallState.ENDED;
       button.disabled = !canEnd;
@@ -8669,14 +8694,40 @@ function updateCallOverlayState() {
 function updateCallMediaVisibility() {
   const hasActive = Boolean(activeCall);
   const showVideo = hasActive && activeCall.type === CallType.VIDEO;
+  const localStream = showVideo ? activeCall?.localStream ?? null : null;
+  const hasLocalStream = Boolean(localStream);
+  const localVideoTracks = hasLocalStream
+    ? typeof localStream.getVideoTracks === "function"
+      ? localStream.getVideoTracks()
+      : []
+    : [];
+  const cameraEnabled =
+    hasLocalStream &&
+    activeCall?.isCameraEnabled !== false &&
+    localVideoTracks.some((track) => track.enabled !== false);
 
   if (callOverlayMediaElement) {
     callOverlayMediaElement.hidden = !showVideo;
   }
 
   if (callOverlayLocalVideoWrapper) {
-    const shouldShowLocal = showVideo && Boolean(activeCall?.localStream);
+    const shouldShowLocal = showVideo && hasLocalStream;
     callOverlayLocalVideoWrapper.hidden = !shouldShowLocal;
+  }
+
+  if (callOverlayLocalVideoElement) {
+    const shouldShowVideo = showVideo && hasLocalStream && cameraEnabled;
+    callOverlayLocalVideoElement.hidden = !shouldShowVideo;
+    callOverlayLocalVideoElement.style.display = shouldShowVideo ? "" : "none";
+  }
+
+  if (callOverlayLocalVideoPlaceholder) {
+    const shouldShowPlaceholder = showVideo && hasLocalStream && !cameraEnabled;
+    callOverlayLocalVideoPlaceholder.hidden = !shouldShowPlaceholder;
+    callOverlayLocalVideoPlaceholder.setAttribute(
+      "aria-hidden",
+      shouldShowPlaceholder ? "false" : "true"
+    );
   }
 
   if (callOverlayRemoteVideoWrapper) {
@@ -8692,6 +8743,12 @@ function attachCallLocalStream(stream) {
 
   activeCall.localStream = stream;
 
+  if (activeCall.type === CallType.VIDEO) {
+    const localTracks =
+      typeof stream.getVideoTracks === "function" ? stream.getVideoTracks() : [];
+    activeCall.isCameraEnabled = localTracks.some((track) => track.enabled !== false);
+  }
+
   if (callOverlayLocalVideoElement) {
     callOverlayLocalVideoElement.srcObject = stream;
     callOverlayLocalVideoElement.muted = true;
@@ -8703,6 +8760,7 @@ function attachCallLocalStream(stream) {
   }
 
   updateCallMediaVisibility();
+  updateCallOverlayState();
 }
 
 function attachCallRemoteStream(stream) {
@@ -8785,6 +8843,11 @@ function cleanupActiveCallResources() {
       // Ignore pause errors.
     }
     callOverlayLocalVideoElement.srcObject = null;
+  }
+
+  if (callOverlayLocalVideoPlaceholder) {
+    callOverlayLocalVideoPlaceholder.hidden = true;
+    callOverlayLocalVideoPlaceholder.setAttribute("aria-hidden", "true");
   }
 
   if (callOverlayRemoteVideoElement) {
@@ -9708,12 +9771,16 @@ function openCallOverlay({
     hasRemoteDescription: false,
     isApplyingRemoteDescription: false,
     primaryParticipantName: primaryName,
+    isCameraEnabled: type === CallType.VIDEO,
   };
 
   callOverlayControlButtons.forEach((button) => {
     const action = button.dataset.callControl;
-    if (action === "mute" || action === "speaker") {
+    if (action === "mute" || action === "speaker" || action === "camera") {
       button.setAttribute("aria-pressed", "false");
+      if (action === "camera") {
+        button.textContent = "Camera on";
+      }
     }
   });
 
@@ -9808,8 +9875,11 @@ function closeCallOverlay({ restoreFocus = true, showToastMessage } = {}) {
     button.disabled = true;
     button.setAttribute("aria-disabled", "true");
     const action = button.dataset.callControl;
-    if (action === "mute" || action === "speaker") {
+    if (action === "mute" || action === "speaker" || action === "camera") {
       button.setAttribute("aria-pressed", "false");
+      if (action === "camera") {
+        button.textContent = "Camera on";
+      }
     }
   });
 
@@ -9824,6 +9894,10 @@ function closeCallOverlay({ restoreFocus = true, showToastMessage } = {}) {
   }
   if (callOverlayLocalVideoWrapper) {
     callOverlayLocalVideoWrapper.hidden = true;
+  }
+  if (callOverlayLocalVideoPlaceholder) {
+    callOverlayLocalVideoPlaceholder.hidden = true;
+    callOverlayLocalVideoPlaceholder.setAttribute("aria-hidden", "true");
   }
   if (callOverlayRemoteVideoWrapper) {
     callOverlayRemoteVideoWrapper.dataset.empty = "true";
@@ -9906,6 +9980,32 @@ function handleCallControl(event) {
         callOverlayRemoteVideoElement.volume = volume;
       }
       showToast(next ? "Speakerphone on" : "Speakerphone off");
+      break;
+    }
+    case "camera": {
+      if (activeCall.type !== CallType.VIDEO) {
+        showToast("Camera controls are available during video calls.");
+        return;
+      }
+      const localStream = activeCall.localStream ?? null;
+      const videoTracks =
+        localStream && typeof localStream.getVideoTracks === "function"
+          ? localStream.getVideoTracks()
+          : [];
+      if (!videoTracks.length) {
+        showToast("Camera not available for this call.");
+        return;
+      }
+      const pressed = button.getAttribute("aria-pressed") === "true";
+      const nextPressed = !pressed;
+      const enableTracks = !nextPressed;
+      videoTracks.forEach((track) => {
+        track.enabled = enableTracks;
+      });
+      activeCall.isCameraEnabled = enableTracks;
+      updateCallMediaVisibility();
+      updateCallOverlayState();
+      showToast(enableTracks ? "Camera enabled" : "Camera disabled");
       break;
     }
     case "end": {
@@ -12069,8 +12169,11 @@ function hydrate() {
   }
   callOverlayControlButtons.forEach((button) => {
     const action = button.dataset.callControl;
-    if (action === "mute" || action === "speaker") {
+    if (action === "mute" || action === "speaker" || action === "camera") {
       button.setAttribute("aria-pressed", "false");
+      if (action === "camera") {
+        button.textContent = "Camera on";
+      }
     }
     button.disabled = true;
     button.setAttribute("aria-disabled", "true");
