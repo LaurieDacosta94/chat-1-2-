@@ -132,6 +132,7 @@ const callOverlayParticipantsElement = document.getElementById("call-overlay-par
 const callOverlayNameElement = document.getElementById("call-overlay-name");
 const callOverlayStatusElement = document.getElementById("call-overlay-status");
 const callOverlayControlsElement = document.getElementById("call-overlay-controls");
+const callOverlayCardElement = document.getElementById("call-overlay-card");
 const callOverlayIncomingControlsElement = document.getElementById(
   "call-overlay-incoming-controls"
 );
@@ -8911,6 +8912,73 @@ function renderCallOverlayParticipants(participants) {
   });
 }
 
+function isCallOverlayElementFocusable(element) {
+  if (!(element instanceof HTMLElement)) {
+    return false;
+  }
+  if (element.hidden) {
+    return false;
+  }
+  if (element.closest("[hidden]")) {
+    return false;
+  }
+  if (element.getAttribute("aria-hidden") === "true") {
+    return false;
+  }
+  if (element.hasAttribute("disabled")) {
+    return false;
+  }
+  if (element.getAttribute("aria-disabled") === "true") {
+    return false;
+  }
+  return true;
+}
+
+function getCallOverlayFocusableElements() {
+  if (!callOverlayCardElement) {
+    return [];
+  }
+
+  const focusableSelectors =
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  return Array.from(callOverlayCardElement.querySelectorAll(focusableSelectors)).filter(
+    (element) => isCallOverlayElementFocusable(element)
+  );
+}
+
+function trapCallOverlayFocus(event) {
+  // Keep keyboard focus within the call dialog while it's open.
+  if (!callOverlayElement || callOverlayElement.hidden) {
+    return;
+  }
+  if (event.key !== "Tab") {
+    return;
+  }
+
+  const focusable = getCallOverlayFocusableElements();
+  if (!focusable.length) {
+    event.preventDefault();
+    return;
+  }
+
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+  if (event.shiftKey) {
+    if (!activeElement || !callOverlayCardElement?.contains(activeElement) || activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    }
+    return;
+  }
+
+  if (!activeElement || !callOverlayCardElement?.contains(activeElement) || activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
 function openCallOverlay({
   chat,
   type,
@@ -9005,10 +9073,38 @@ function openCallOverlay({
     callOverlayRemoteAudioElement.muted = false;
   }
 
+  if (typeof document !== "undefined") {
+    // Prevent the underlying layout from scrolling while the call overlay is active.
+    document.body.classList.add("modal-open");
+  }
+
   updateCallOverlayState();
 
-  if (callOverlayCloseButton) {
-    callOverlayCloseButton.focus();
+  let focusTarget = null;
+  if (direction === "incoming" && isCallOverlayElementFocusable(callOverlayAcceptButton)) {
+    focusTarget = callOverlayAcceptButton;
+  } else {
+    const endButton = callOverlayControlButtons.find(
+      (button) => button.dataset.callControl === "end"
+    );
+    if (isCallOverlayElementFocusable(endButton)) {
+      focusTarget = endButton;
+    }
+  }
+
+  if (!focusTarget) {
+    const focusableElements = getCallOverlayFocusableElements();
+    if (focusableElements.length) {
+      focusTarget = focusableElements[0];
+    }
+  }
+
+  if (!focusTarget && isCallOverlayElementFocusable(callOverlayCloseButton)) {
+    focusTarget = callOverlayCloseButton;
+  }
+
+  if (focusTarget) {
+    focusTarget.focus();
   }
 }
 
@@ -9063,6 +9159,16 @@ function closeCallOverlay({ restoreFocus = true, showToastMessage } = {}) {
   }
   if (callOverlayRemoteVideoWrapper) {
     callOverlayRemoteVideoWrapper.dataset.empty = "true";
+  }
+
+  if (
+    (!newContactModal || newContactModal.hidden) &&
+    (!profileModal || profileModal.hidden) &&
+    (!settingsModal || settingsModal.hidden) &&
+    (!chatWallpaperModal || chatWallpaperModal.hidden) &&
+    (!manageParticipantsModal || manageParticipantsModal.hidden)
+  ) {
+    document.body.classList.remove("modal-open");
   }
 
   const restoreTarget = callOverlayRestoreFocusTo;
@@ -11574,6 +11680,9 @@ function hydrate() {
   }
   if (callOverlayBackdrop) {
     callOverlayBackdrop.addEventListener("click", handleCallOverlayClose);
+  }
+  if (callOverlayElement) {
+    callOverlayElement.addEventListener("keydown", trapCallOverlayFocus);
   }
   callOverlayControlButtons.forEach((button) => {
     button.addEventListener("click", handleCallControl);
