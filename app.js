@@ -4061,6 +4061,24 @@ async function handleRealtimeCallAnswer(payload) {
     return;
   }
 
+  if (activeCall.hasRemoteDescription || connection.remoteDescription) {
+    console.warn(
+      "Ignoring remote call answer because a description has already been applied"
+    );
+    return;
+  }
+
+  if (
+    connection.signalingState !== "have-local-offer" &&
+    connection.signalingState !== "have-local-pranswer"
+  ) {
+    console.warn(
+      "Received remote call answer while in unexpected signaling state",
+      connection.signalingState
+    );
+    return;
+  }
+
   try {
     await connection.setRemoteDescription(new RTCSessionDescription(answer));
     activeCall.hasRemoteDescription = true;
