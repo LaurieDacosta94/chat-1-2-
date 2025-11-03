@@ -913,6 +913,9 @@
           <div class="call-overlay__video-wrapper call-overlay__video-wrapper--local" id="call-local-video-wrapper">
             <video class="call-overlay__video call-overlay__video--local" id="call-local-video" autoplay playsinline muted></video>
             <div class="call-overlay__video-label" id="call-local-video-label">You</div>
+            <div class="call-overlay__video-placeholder" id="call-local-video-placeholder" hidden aria-hidden="true">
+              Camera disabled
+            </div>
           </div>
           <audio class="call-overlay__audio" id="call-remote-audio" autoplay></audio>
         </div>
@@ -946,6 +949,14 @@
           aria-pressed="false"
         >
           Speaker
+        </button>
+        <button
+          class="call-overlay__button"
+          type="button"
+          data-call-control="camera"
+          aria-pressed="false"
+        >
+          Camera on
         </button>
         <button class="call-overlay__button call-overlay__button--end" type="button" data-call-control="end">
           End call
