@@ -3890,7 +3890,13 @@ function handleRealtimeChatError(payload) {
 // overlay while we fetch the full chat details in the background.
 function ensureChatForIncomingCall(
   chatId,
-  { remoteAccountIds = [], remoteUserId = null, remoteUsername = null } = {}
+  {
+    remoteAccountIds = [],
+    remoteUserId = null,
+    remoteUsername = null,
+    chatType = null,
+    chatName = null,
+  } = {}
 ) {
   const normalizedChatId = normalizeChatIdentifier(chatId);
   if (!normalizedChatId) {
@@ -3926,17 +3932,47 @@ function ensureChatForIncomingCall(
     resolvedContact = storedContact ?? normalizeContact(placeholderContact);
   }
 
+  const fallbackName =
+    typeof chatName === "string" && chatName.trim() ? chatName.trim() : null;
   const placeholderName =
+    fallbackName ||
     (resolvedContact && (resolvedContact.displayName || resolvedContact.nickname)) ||
     (typeof remoteUsername === "string" && remoteUsername.trim()) ||
     "Incoming call";
 
+  const normalizedRemoteAccountIds = normalizeParticipantAccountIds(remoteAccountIds);
+  const resolvedChatType = chatType === ChatType.GROUP ? ChatType.GROUP : ChatType.DIRECT;
+
+  const placeholderParticipants =
+    resolvedChatType === ChatType.GROUP
+      ? normalizeGroupParticipants(
+          normalizedRemoteAccountIds
+            .map((accountId) => {
+              const contact = findContactByAccountId(accountId);
+              if (contact) {
+                const normalizedContact = normalizeContact(contact);
+                return (
+                  normalizedContact?.displayName ||
+                  normalizedContact?.name ||
+                  normalizedContact?.nickname ||
+                  ""
+                );
+              }
+              return "";
+            })
+            .filter(Boolean)
+        )
+      : [];
+
   const placeholderChat = normalizeChat({
     id: normalizedChatId,
     name: placeholderName,
-    type: ChatType.DIRECT,
+    type: resolvedChatType,
     messages: [],
     contact: resolvedContact || undefined,
+    participantAccountIds:
+      resolvedChatType === ChatType.GROUP ? normalizedRemoteAccountIds : undefined,
+    participants: resolvedChatType === ChatType.GROUP ? placeholderParticipants : undefined,
   });
 
   chats = [placeholderChat, ...chats];
@@ -4006,11 +4042,42 @@ async function handleRealtimeCallOffer(payload) {
       if (remoteUserId) {
         activeCall.remoteUserId = remoteUserId;
       }
+      if (chat?.type) {
+        activeCall.chatType = chat.type;
+      }
       const mergedAccountIds = normalizeParticipantAccountIds([
         ...(Array.isArray(activeCall.remoteAccountIds) ? activeCall.remoteAccountIds : []),
         ...remoteAccountIds,
       ]);
       activeCall.remoteAccountIds = mergedAccountIds;
+
+      if (typeof chat?.name === "string" && chat.name.trim()) {
+        const trimmedName = chat.name.trim();
+        activeCall.chatName = trimmedName;
+        if (callOverlayNameElement) {
+          callOverlayNameElement.textContent = trimmedName;
+        }
+      }
+
+      const participants = getCallParticipantNames(chat);
+      if (participants.length) {
+        activeCall.participants = participants;
+        renderCallOverlayParticipants(participants);
+        const typeLabel = CALL_TYPE_LABELS[activeCall.type] ?? "Call";
+        const participantCountLabel = participants.length
+          ? ` · ${participants.length} participant${participants.length === 1 ? "" : "s"}`
+          : "";
+        if (callOverlayTypeElement) {
+          callOverlayTypeElement.textContent = `${typeLabel}${participantCountLabel}`;
+        }
+      }
+
+      const primaryName = getPrimaryCallParticipantName(chat);
+      if (primaryName) {
+        activeCall.primaryParticipantName = primaryName;
+      }
+
+      updateCallOverlayState();
 
       if (callOverlayElement?.hidden) {
         openCallOverlay({
@@ -7329,6 +7396,41 @@ function renderChatView(chat) {
   }
   chatAvatarElement.textContent = chat.avatar ?? chat.name.slice(0, 1).toUpperCase();
 
+  if (
+    activeCall &&
+    normalizeChatIdentifier(chat.id) === normalizeChatIdentifier(activeCall.chatId)
+  ) {
+    const participants = getCallParticipantNames(chat);
+    if (participants.length) {
+      activeCall.participants = participants;
+      renderCallOverlayParticipants(participants);
+      const typeLabel = CALL_TYPE_LABELS[activeCall.type] ?? "Call";
+      const participantCountLabel = participants.length
+        ? ` · ${participants.length} participant${participants.length === 1 ? "" : "s"}`
+        : "";
+      if (callOverlayTypeElement) {
+        callOverlayTypeElement.textContent = `${typeLabel}${participantCountLabel}`;
+      }
+    }
+
+    if (typeof chat.name === "string" && chat.name.trim()) {
+      const trimmedName = chat.name.trim();
+      activeCall.chatName = trimmedName;
+      if (callOverlayNameElement) {
+        callOverlayNameElement.textContent = trimmedName;
+      }
+    }
+
+    activeCall.chatType = chat.type ?? activeCall.chatType ?? null;
+
+    const primaryName = getPrimaryCallParticipantName(chat);
+    if (primaryName) {
+      activeCall.primaryParticipantName = primaryName;
+    }
+
+    updateCallOverlayState();
+  }
+
   updateCallControls(chat);
   if (chat && chat.type === ChatType.GROUP) {
     const accountIds = getChatParticipantAccountIds(chat, { includeSelf: true });
@@ -8432,11 +8534,6 @@ async function startCall(callType) {
     return;
   }
 
-  if (chat.type === ChatType.GROUP) {
-    showToast("Group calling is not available yet.");
-    return;
-  }
-
   const capabilities = chat.capabilities ?? {};
   if (callType === CallType.AUDIO && capabilities.audio === false) {
     showToast("Audio calling unavailable for this chat");
@@ -8456,6 +8553,11 @@ async function startCall(callType) {
   const remoteAccountIds = normalizeParticipantAccountIds(
     getChatParticipantAccountIds(chat)
   );
+
+  if (!remoteAccountIds.length) {
+    showToast("No participants available for this call.");
+    return;
+  }
 
   openCallOverlay({
     chat,
@@ -8638,6 +8740,43 @@ function updateCallOverlayState() {
 
   if (callOverlayIncomingControlsElement) {
     const showIncoming = activeCall.direction === "incoming" && state === CallState.RINGING;
+    if (!showIncoming) {
+      const activeElement =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      if (activeElement && callOverlayIncomingControlsElement.contains(activeElement)) {
+        const endButton = callOverlayControlButtons.find(
+          (button) => button.dataset.callControl === "end"
+        );
+        const fallbackElements = getCallOverlayFocusableElements().filter((element) => {
+          if (!(element instanceof HTMLElement)) {
+            return false;
+          }
+          if (element === activeElement) {
+            return false;
+          }
+          return !callOverlayIncomingControlsElement.contains(element);
+        });
+
+        const preferredFallbacks = [];
+        if (isCallOverlayElementFocusable(endButton)) {
+          preferredFallbacks.push(endButton);
+        }
+        if (isCallOverlayElementFocusable(callOverlayCloseButton)) {
+          preferredFallbacks.push(callOverlayCloseButton);
+        }
+        preferredFallbacks.push(...fallbackElements);
+
+        const focusTarget = preferredFallbacks.find((element) =>
+          isCallOverlayElementFocusable(element)
+        );
+
+        if (focusTarget) {
+          focusTarget.focus();
+        } else {
+          activeElement.blur();
+        }
+      }
+    }
     callOverlayIncomingControlsElement.hidden = !showIncoming;
     callOverlayIncomingControlsElement.setAttribute("aria-hidden", showIncoming ? "false" : "true");
     callOverlayIncomingControlsElement.style.display = showIncoming ? "" : "none";
@@ -9026,7 +9165,7 @@ function sendCallSignal(eventName, payload) {
   }
 }
 
-async function acceptIncomingCall() {
+async function acceptIncomingCallInternal() {
   if (
     !activeCall ||
     activeCall.direction !== "incoming" ||
@@ -9041,12 +9180,53 @@ async function acceptIncomingCall() {
     return;
   }
 
-  const chat = getChatById(activeCall.chatId);
+  let chat = getChatById(activeCall.chatId);
+  if (!chat) {
+    chat = ensureChatForIncomingCall(activeCall.chatId, {
+      remoteAccountIds: Array.isArray(activeCall.remoteAccountIds)
+        ? activeCall.remoteAccountIds
+        : [],
+      remoteUserId: activeCall.remoteUserId ?? null,
+      remoteUsername: activeCall.remoteUsername ?? null,
+      chatType: activeCall.chatType ?? null,
+      chatName: activeCall.chatName ?? null,
+    });
+  }
   if (!chat) {
     showToast("Chat no longer available.");
     declineIncomingCall({ notifyRemote: true });
     return;
   }
+
+  const participants = getCallParticipantNames(chat);
+  if (participants.length) {
+    activeCall.participants = participants;
+    renderCallOverlayParticipants(participants);
+    const typeLabel = CALL_TYPE_LABELS[activeCall.type] ?? "Call";
+    const participantCountLabel = participants.length
+      ? ` · ${participants.length} participant${participants.length === 1 ? "" : "s"}`
+      : "";
+    if (callOverlayTypeElement) {
+      callOverlayTypeElement.textContent = `${typeLabel}${participantCountLabel}`;
+    }
+  }
+
+  if (typeof chat.name === "string" && chat.name.trim()) {
+    const trimmedName = chat.name.trim();
+    activeCall.chatName = trimmedName;
+    if (callOverlayNameElement) {
+      callOverlayNameElement.textContent = trimmedName;
+    }
+  }
+
+  activeCall.chatType = chat.type ?? activeCall.chatType ?? null;
+
+  const primaryName = getPrimaryCallParticipantName(chat);
+  if (primaryName) {
+    activeCall.primaryParticipantName = primaryName;
+  }
+
+  updateCallOverlayState();
 
   const offer = activeCall.offer;
   if (!offer || typeof offer.sdp !== "string") {
@@ -9461,93 +9641,7 @@ function sendCallSignal(eventName, payload) {
 }
 
 async function acceptIncomingCall() {
-  if (
-    !activeCall ||
-    activeCall.direction !== "incoming" ||
-    !window.RTCPeerConnection ||
-    !navigator.mediaDevices ||
-    typeof navigator.mediaDevices.getUserMedia !== "function"
-  ) {
-    if (!activeCall) {
-      return;
-    }
-    showToast("Calling requires a browser that supports WebRTC.");
-    return;
-  }
-
-  const chat = getChatById(activeCall.chatId);
-  if (!chat) {
-    showToast("Chat no longer available.");
-    declineIncomingCall({ notifyRemote: true });
-    return;
-  }
-
-  const offer = activeCall.offer;
-  if (!offer || typeof offer.sdp !== "string") {
-    showToast("Call offer is no longer available.");
-    declineIncomingCall({ notifyRemote: true });
-    return;
-  }
-
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: true,
-      video: activeCall.type === CallType.VIDEO,
-    });
-    if (!activeCall || activeCall.direction !== "incoming") {
-      stream.getTracks().forEach((track) => {
-        try {
-          track.stop();
-        } catch (_error) {}
-      });
-      return;
-    }
-
-    attachCallLocalStream(stream);
-
-    const peerConnection = createPeerConnectionForActiveCall();
-    if (!peerConnection) {
-      stream.getTracks().forEach((track) => {
-        try {
-          track.stop();
-        } catch (_error) {}
-      });
-      declineIncomingCall({ notifyRemote: true });
-      return;
-    }
-
-    activeCall.peerConnection = peerConnection;
-
-    stream.getTracks().forEach((track) => {
-      try {
-        peerConnection.addTrack(track, stream);
-      } catch (error) {
-        console.error("Failed to add local track to call", error);
-      }
-    });
-
-    await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-    activeCall.hasRemoteDescription = true;
-    flushPendingCallCandidates();
-
-    const answer = await peerConnection.createAnswer();
-    await peerConnection.setLocalDescription(answer);
-    activeCall.hasLocalDescription = true;
-
-    const payload = {
-      chat_id: activeCall.chatId,
-      answer: { type: answer.type, sdp: answer.sdp },
-    };
-    if (Array.isArray(activeCall.remoteAccountIds) && activeCall.remoteAccountIds.length) {
-      payload.recipient_ids = activeCall.remoteAccountIds;
-    }
-    sendCallSignal("call:answer", payload);
-    setActiveCallState(CallState.CONNECTING);
-  } catch (error) {
-    console.error("Failed to accept call", error);
-    showToast("Unable to join the call.");
-    endActiveCall({ reason: "Call unavailable", suppressToast: true, signalRemote: true });
-  }
+  return acceptIncomingCallInternal();
 }
 
 function declineIncomingCall({ notifyRemote = true, reason = "Call declined" } = {}) {
@@ -9745,6 +9839,8 @@ function openCallOverlay({
     }
   }
 
+  const resolvedChatType = chat?.type ?? null;
+
   const primaryName =
     remoteUsername ||
     getPrimaryCallParticipantName(chat) ||
@@ -9772,6 +9868,8 @@ function openCallOverlay({
     isApplyingRemoteDescription: false,
     primaryParticipantName: primaryName,
     isCameraEnabled: type === CallType.VIDEO,
+    chatType: resolvedChatType,
+    chatName,
   };
 
   callOverlayControlButtons.forEach((button) => {
