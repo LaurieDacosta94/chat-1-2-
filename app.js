@@ -3985,6 +3985,46 @@ async function handleRealtimeCallOffer(payload) {
   }
 
   if (activeCall && activeCall.state !== CallState.ENDED) {
+    const existingChatId = normalizeChatIdentifier(activeCall.chatId);
+    const isSameIncomingCall =
+      existingChatId &&
+      existingChatId === chatId &&
+      activeCall.direction === "incoming";
+
+    if (isSameIncomingCall) {
+      // When duplicate offers arrive for the same incoming call (for example, if the
+      // caller retries signaling), keep the current overlay instead of declining the
+      // call as "busy". Refresh the stored metadata so the participant information
+      // stays accurate and allow the callee to answer the updated offer.
+      activeCall.offer = offer;
+      if (remoteUsername) {
+        activeCall.remoteUsername = remoteUsername;
+      }
+      if (remoteUserId) {
+        activeCall.remoteUserId = remoteUserId;
+      }
+      const mergedAccountIds = normalizeParticipantAccountIds([
+        ...(Array.isArray(activeCall.remoteAccountIds) ? activeCall.remoteAccountIds : []),
+        ...remoteAccountIds,
+      ]);
+      activeCall.remoteAccountIds = mergedAccountIds;
+
+      if (callOverlayElement?.hidden) {
+        openCallOverlay({
+          chat,
+          type: callType,
+          direction: "incoming",
+          offer,
+          remoteUserId,
+          remoteUsername,
+          remoteAccountIds: mergedAccountIds,
+        });
+      } else {
+        setActiveCallState(CallState.RINGING);
+      }
+      return;
+    }
+
     const declinePayload = { chat_id: chatId, reason: "User is busy" };
     if (normalizedRemote) {
       declinePayload.recipient_ids = [normalizedRemote];
