@@ -4061,6 +4061,15 @@ async function handleRealtimeCallAnswer(payload) {
     return;
   }
 
+  if (activeCall.isApplyingRemoteDescription) {
+    // When `setRemoteDescription` is still resolving we may receive duplicate answers.
+    // Ignore them until the first operation finishes so the peer connection stays stable.
+    console.warn(
+      "Ignoring remote call answer while a previous answer is still being applied"
+    );
+    return;
+  }
+
   const remoteDescriptionApplied = Boolean(
     activeCall.hasRemoteDescription ||
       connection.remoteDescription ||
@@ -4083,6 +4092,8 @@ async function handleRealtimeCallAnswer(payload) {
     );
     return;
   }
+
+  activeCall.isApplyingRemoteDescription = true;
 
   try {
     await connection.setRemoteDescription(new RTCSessionDescription(answer));
@@ -4115,6 +4126,10 @@ async function handleRealtimeCallAnswer(payload) {
 
     console.error("Failed to apply remote call answer", error);
     endActiveCall({ reason: "Call unavailable", suppressToast: false, signalRemote: false });
+  } finally {
+    if (activeCall) {
+      activeCall.isApplyingRemoteDescription = false;
+    }
   }
 }
 
@@ -8536,10 +8551,12 @@ function updateCallOverlayState() {
     if (callOverlayControlsElement) {
       callOverlayControlsElement.hidden = true;
       callOverlayControlsElement.setAttribute("aria-hidden", "true");
+      callOverlayControlsElement.style.display = "none";
     }
     if (callOverlayIncomingControlsElement) {
       callOverlayIncomingControlsElement.hidden = true;
       callOverlayIncomingControlsElement.setAttribute("aria-hidden", "true");
+      callOverlayIncomingControlsElement.style.display = "none";
     }
     callOverlayControlButtons.forEach((button) => {
       button.disabled = true;
@@ -8580,12 +8597,14 @@ function updateCallOverlayState() {
     const showControls = !(activeCall.direction === "incoming" && state === CallState.RINGING);
     callOverlayControlsElement.hidden = !showControls;
     callOverlayControlsElement.setAttribute("aria-hidden", showControls ? "false" : "true");
+    callOverlayControlsElement.style.display = showControls ? "" : "none";
   }
 
   if (callOverlayIncomingControlsElement) {
     const showIncoming = activeCall.direction === "incoming" && state === CallState.RINGING;
     callOverlayIncomingControlsElement.hidden = !showIncoming;
     callOverlayIncomingControlsElement.setAttribute("aria-hidden", showIncoming ? "false" : "true");
+    callOverlayIncomingControlsElement.style.display = showIncoming ? "" : "none";
   }
 
   callOverlayControlButtons.forEach((button) => {
@@ -8688,6 +8707,8 @@ function cleanupActiveCallResources() {
   if (!activeCall) {
     return;
   }
+
+  activeCall.isApplyingRemoteDescription = false;
 
   if (callDisconnectWatcher) {
     clearTimeout(callDisconnectWatcher);
@@ -9646,6 +9667,7 @@ function openCallOverlay({
     remoteStream: null,
     hasLocalDescription: false,
     hasRemoteDescription: false,
+    isApplyingRemoteDescription: false,
     primaryParticipantName: primaryName,
   };
 
@@ -9735,10 +9757,12 @@ function closeCallOverlay({ restoreFocus = true, showToastMessage } = {}) {
   if (callOverlayControlsElement) {
     callOverlayControlsElement.hidden = true;
     callOverlayControlsElement.setAttribute("aria-hidden", "true");
+    callOverlayControlsElement.style.display = "none";
   }
   if (callOverlayIncomingControlsElement) {
     callOverlayIncomingControlsElement.hidden = true;
     callOverlayIncomingControlsElement.setAttribute("aria-hidden", "true");
+    callOverlayIncomingControlsElement.style.display = "none";
   }
 
   callOverlayControlButtons.forEach((button) => {
