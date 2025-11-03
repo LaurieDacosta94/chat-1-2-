@@ -475,6 +475,11 @@ body.auth-locked .app {
   font-weight: 600;
 }
 
+.chat-item__preview--call {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .chat {
   background: var(--chat-background);
   display: flex;
@@ -522,12 +527,46 @@ body.auth-locked .app {
   display: none !important;
 }
 
+.chat__call-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0 1.5rem 0.75rem;
+  padding: 0.75rem 1rem;
+  border-radius: 12px;
+  border: 1px solid rgba(37, 211, 102, 0.32);
+  background: rgba(37, 211, 102, 0.14);
+  color: var(--text-primary);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.chat__call-banner::before {
+  content: "📞";
+  font-size: 1.1rem;
+  flex-shrink: 0;
+}
+
+.chat__call-banner[hidden] {
+  display: none;
+}
+
 :root[data-theme="light"] .chat__participants-bar {
   background: rgba(17, 27, 33, 0.04);
 }
 
 :root[data-theme="light"] .chat__participants-bar::-webkit-scrollbar-thumb {
   background: rgba(17, 27, 33, 0.18);
+}
+
+:root[data-theme="light"] .chat-item__preview--call {
+  color: #008069;
+}
+
+:root[data-theme="light"] .chat__call-banner {
+  border-color: rgba(0, 128, 105, 0.24);
+  background: rgba(0, 128, 105, 0.12);
+  color: #075e54;
 }
 
 
