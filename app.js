@@ -8359,6 +8359,33 @@ function handleChatWallpaperUseDefault(event) {
   closeChatWallpaperModal();
 }
 
+function isMediaPermissionDeniedError(error) {
+  // Browsers surface permission denials using a handful of DOMException names
+  // (NotAllowedError, PermissionDeniedError, SecurityError) and, in older
+  // engines, only via the message text. Normalize them so we can react
+  // consistently when access to the microphone or camera is blocked.
+  if (!error) {
+    return false;
+  }
+
+  const name = typeof error.name === "string" ? error.name.toLowerCase() : "";
+  if (name === "notallowederror" || name === "permissiondeniederror") {
+    return true;
+  }
+
+  if (name === "securityerror") {
+    const message = typeof error.message === "string" ? error.message.toLowerCase() : "";
+    return message.includes("permission") || message.includes("denied");
+  }
+
+  if (!name && typeof error.message === "string") {
+    const message = error.message.toLowerCase();
+    return message.includes("permission denied") || message.includes("denied permission");
+  }
+
+  return false;
+}
+
 function resolveCallPermissionErrorMessage(action, error) {
   // Normalize browser-specific DOMException names so we can surface more actionable
   // guidance when microphone/camera access fails. This keeps the call overlay UX
@@ -8503,10 +8530,16 @@ async function startCall(callType) {
 
     setActiveCallState(CallState.INITIATING);
   } catch (error) {
-    console.error("Failed to start call", error);
+    const permissionDenied = isMediaPermissionDeniedError(error);
+    if (permissionDenied) {
+      console.warn("Unable to start call because media permissions were denied.", error);
+    } else {
+      console.error("Failed to start call", error);
+    }
     const errorMessage = resolveCallPermissionErrorMessage("start", error);
     showToast(errorMessage);
-    endActiveCall({ reason: "Call unavailable", suppressToast: true, signalRemote: false });
+    const hangupReason = permissionDenied ? "Media permissions denied" : "Call unavailable";
+    endActiveCall({ reason: hangupReason, suppressToast: true, signalRemote: false });
   }
 }
 
@@ -9014,10 +9047,16 @@ async function acceptIncomingCall() {
     sendCallSignal("call:answer", payload);
     setActiveCallState(CallState.CONNECTING);
   } catch (error) {
-    console.error("Failed to accept call", error);
+    const permissionDenied = isMediaPermissionDeniedError(error);
+    if (permissionDenied) {
+      console.warn("Unable to accept call because media permissions were denied.", error);
+    } else {
+      console.error("Failed to accept call", error);
+    }
     const errorMessage = resolveCallPermissionErrorMessage("accept", error);
     showToast(errorMessage);
-    endActiveCall({ reason: "Call unavailable", suppressToast: true, signalRemote: true });
+    const hangupReason = permissionDenied ? "Media permissions denied" : "Call unavailable";
+    endActiveCall({ reason: hangupReason, suppressToast: true, signalRemote: true });
   }
 }
 
