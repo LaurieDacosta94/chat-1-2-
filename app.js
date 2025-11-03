@@ -39,6 +39,7 @@ const manageParticipantsButton = document.getElementById("manage-participants");
 const deleteChatButton = document.getElementById("delete-chat");
 const chatWallpaperButton = document.getElementById("customize-chat-wallpaper");
 const chatParticipantsElement = document.getElementById("chat-participants");
+const chatCallBannerElement = document.getElementById("chat-call-banner");
 const filterChips = Array.from(document.querySelectorAll(".filter-chip"));
 const filterCountElements = {
   all: document.querySelector('[data-filter-count="all"]'),
@@ -4023,6 +4024,23 @@ async function handleRealtimeCallOffer(payload) {
     return;
   }
 
+  if (chat.type === ChatType.GROUP) {
+    applyCallParticipantToSession(chat, {
+      accountId: remoteUserId,
+      username: remoteUsername,
+      displayName: remoteUsername,
+      type: callType,
+    });
+    if (remoteAccountIds.length) {
+      ensureChatCallSession(chat, {
+        type: callType,
+        participantAccountIds: remoteAccountIds,
+      });
+    }
+  } else {
+    clearChatCallSession(chat);
+  }
+
   if (activeCall && activeCall.state !== CallState.ENDED) {
     const existingChatId = normalizeChatIdentifier(activeCall.chatId);
     const isSameIncomingCall =
@@ -4125,6 +4143,50 @@ async function handleRealtimeCallAnswer(payload) {
     return;
   }
 
+  const answeringAccountId = normalizeAccountId(
+    payload.from ?? payload.from_user_id ?? payload.participant_id ?? null
+  );
+  const answeringUsername =
+    typeof payload.from_username === "string" && payload.from_username.trim()
+      ? payload.from_username.trim()
+      : "";
+
+  const callChat = getChatById(chatId);
+  if (callChat && callChat.type === ChatType.GROUP) {
+    applyCallParticipantToSession(callChat, {
+      accountId: answeringAccountId,
+      username: answeringUsername,
+      displayName: answeringUsername,
+      type: activeCall.type,
+    });
+  }
+
+  if (Array.isArray(activeCall.remoteAccountIds) && answeringAccountId) {
+    const normalizedAnswering = normalizeAccountId(answeringAccountId);
+    if (
+      normalizedAnswering &&
+      !activeCall.remoteAccountIds.some(
+        (id) => normalizeAccountId(id) === normalizedAnswering
+      )
+    ) {
+      activeCall.remoteAccountIds.push(normalizedAnswering);
+    }
+  }
+
+  if (answeringUsername) {
+    const nextParticipants = mergeCallParticipantNames(
+      activeCall.participants ?? [],
+      answeringUsername
+    );
+    if (
+      !areStringArraysEqual(activeCall.participants ?? [], nextParticipants)
+    ) {
+      activeCall.participants = nextParticipants;
+      renderCallOverlayParticipants(nextParticipants);
+      updateCallOverlayState();
+    }
+  }
+
   const connection = activeCall.peerConnection;
   const answer = payload.answer;
   if (!connection || !answer || typeof answer.sdp !== "string") {
@@ -4195,7 +4257,12 @@ async function handleRealtimeCallAnswer(payload) {
     }
 
     console.error("Failed to apply remote call answer", error);
-    endActiveCall({ reason: "Call unavailable", suppressToast: false, signalRemote: false });
+    endActiveCall({
+      reason: "Call unavailable",
+      suppressToast: false,
+      signalRemote: false,
+      terminateSession: true,
+    });
   } finally {
     if (activeCall) {
       activeCall.isApplyingRemoteDescription = false;
@@ -4235,12 +4302,12 @@ function handleRealtimeCallCandidate(payload) {
 }
 
 function handleRealtimeCallHangup(payload) {
-  if (!payload || typeof payload !== "object" || !activeCall) {
+  if (!payload || typeof payload !== "object") {
     return;
   }
 
   const chatId = normalizeChatIdentifier(payload.chat_id);
-  if (!chatId || chatId !== activeCall.chatId) {
+  if (!chatId) {
     return;
   }
 
@@ -4249,16 +4316,90 @@ function handleRealtimeCallHangup(payload) {
       ? payload.reason.trim()
       : "Call ended";
 
-  endActiveCall({ reason, suppressToast: false, signalRemote: false });
+  const leavingAccountId = normalizeAccountId(
+    payload.from ?? payload.from_user_id ?? payload.participant_id ?? payload.account_id ?? null
+  );
+  const leavingUsername =
+    typeof payload.from_username === "string" && payload.from_username.trim()
+      ? payload.from_username.trim()
+      : "";
+
+  const chat = getChatById(chatId);
+  const isCurrentCall = Boolean(activeCall && activeCall.chatId === chatId);
+
+  if (chat && chat.type === ChatType.GROUP) {
+    if (leavingAccountId || leavingUsername) {
+      removeParticipantsFromChatSession(chat, {
+        accountIds: leavingAccountId ? [leavingAccountId] : [],
+        names: leavingUsername ? [leavingUsername] : [],
+      });
+    }
+
+    if (isCurrentCall) {
+      if (Array.isArray(activeCall.remoteAccountIds) && leavingAccountId) {
+        activeCall.remoteAccountIds = activeCall.remoteAccountIds.filter((id) => {
+          const normalized = normalizeAccountId(id);
+          return !(normalized && normalized === leavingAccountId);
+        });
+      }
+      pruneActiveCallParticipant({ accountId: leavingAccountId, name: leavingUsername });
+    }
+
+    const session = getCallSession(chat);
+    const selfId = normalizeAccountId(authState?.user?.id);
+    const remainingRemoteParticipants = session
+      ? session.participantAccountIds.filter((id) => {
+          const normalized = normalizeAccountId(id);
+          if (!normalized) {
+            return false;
+          }
+          if (selfId && normalized === selfId) {
+            return false;
+          }
+          return true;
+        })
+      : [];
+
+    if (!session || !remainingRemoteParticipants.length) {
+      if (isCurrentCall) {
+        endActiveCall({
+          reason,
+          suppressToast: false,
+          signalRemote: false,
+          terminateSession: true,
+        });
+      } else if (chat.callSession) {
+        clearChatCallSession(chat);
+      }
+    } else if (isCurrentCall) {
+      updateCallOverlayState();
+    }
+    return;
+  }
+
+  if (isCurrentCall) {
+    endActiveCall({ reason, suppressToast: false, signalRemote: false, terminateSession: true });
+  } else if (chat && chat.callSession) {
+    clearChatCallSession(chat);
+  }
 }
 
 function handleRealtimeCallDecline(payload) {
-  if (!payload || typeof payload !== "object" || !activeCall) {
+  if (!payload || typeof payload !== "object") {
     return;
   }
 
   const chatId = normalizeChatIdentifier(payload.chat_id);
-  if (!chatId || chatId !== activeCall.chatId || activeCall.direction !== "outgoing") {
+  if (!chatId) {
+    return;
+  }
+
+  const isCurrentCall =
+    Boolean(activeCall) &&
+    activeCall.chatId === chatId &&
+    activeCall.direction === "outgoing";
+
+  if (!isCurrentCall) {
     return;
   }
 
@@ -4267,7 +4408,61 @@ function handleRealtimeCallDecline(payload) {
       ? payload.reason.trim()
       : "Call declined";
 
-  endActiveCall({ reason, suppressToast: false, signalRemote: false });
+  const decliningAccountId = normalizeAccountId(
+    payload.from ?? payload.from_user_id ?? payload.participant_id ?? payload.account_id ?? null
+  );
+  const decliningUsername =
+    typeof payload.from_username === "string" && payload.from_username.trim()
+      ? payload.from_username.trim()
+      : "";
+
+  const chat = getChatById(chatId);
+  if (chat && chat.type === ChatType.GROUP) {
+    if (decliningAccountId || decliningUsername) {
+      removeParticipantsFromChatSession(chat, {
+        accountIds: decliningAccountId ? [decliningAccountId] : [],
+        names: decliningUsername ? [decliningUsername] : [],
+      });
+    }
+
+    if (Array.isArray(activeCall.remoteAccountIds) && decliningAccountId) {
+      activeCall.remoteAccountIds = activeCall.remoteAccountIds.filter((id) => {
+        const normalized = normalizeAccountId(id);
+        return !(normalized && normalized === decliningAccountId);
+      });
+    }
+
+    pruneActiveCallParticipant({ accountId: decliningAccountId, name: decliningUsername });
+
+    const session = getCallSession(chat);
+    const selfId = normalizeAccountId(authState?.user?.id);
+    const remainingRemoteParticipants = session
+      ? session.participantAccountIds.filter((id) => {
+          const normalized = normalizeAccountId(id);
+          if (!normalized) {
+            return false;
+          }
+          if (selfId && normalized === selfId) {
+            return false;
+          }
+          return true;
+        })
+      : [];
+
+    if (!session || !remainingRemoteParticipants.length) {
+      endActiveCall({
+        reason,
+        suppressToast: false,
+        signalRemote: false,
+        terminateSession: true,
+      });
+    } else {
+      updateCallOverlayState();
+    }
+    return;
+  }
+
+  endActiveCall({ reason, suppressToast: false, signalRemote: false, terminateSession: true });
 }
 
 function handleRealtimeCallError(payload) {
@@ -5269,7 +5464,7 @@ function resetAppDataToDefaults({ auth, removeStoredData = true } = {}) {
     closeNewContactModal();
   }
   if (callOverlayElement && !callOverlayElement.hidden) {
-    endActiveCall({ reason: "Signed out" });
+    endActiveCall({ reason: "Signed out", terminateSession: true });
   }
 }
 
@@ -6126,7 +6321,14 @@ function renderChats(searchText = "") {
     const draftText = getDraft(chat.id)?.trim();
     const draftAttachments = getAttachmentDraft(chat.id);
     const draftAttachmentSummary = formatAttachmentSummary(draftAttachments);
-    if (draftText || draftAttachmentSummary) {
+    const callSession = getCallSession(chat);
+    if (callSession) {
+      const callLabel =
+        callSession.type === CallType.VIDEO ? "Video call in progress" : "Audio call in progress";
+      previewNode.textContent = callLabel;
+      previewNode.classList.remove("chat-item__preview--draft");
+      previewNode.classList.add("chat-item__preview--call");
+    } else if (draftText || draftAttachmentSummary) {
       const parts = [];
       if (draftAttachmentSummary) {
         parts.push(`📎 ${draftAttachmentSummary}`);
@@ -6137,16 +6339,20 @@ function renderChats(searchText = "") {
       const summary = parts.length ? parts.join(" · ") : draftAttachmentSummary ?? "Attachment";
       previewNode.textContent = `Draft: ${summary}`;
       previewNode.classList.add("chat-item__preview--draft");
+      previewNode.classList.remove("chat-item__preview--call");
     } else if (lastMessage) {
       previewNode.textContent = formatMessagePreview(lastMessage);
       previewNode.classList.remove("chat-item__preview--draft");
+      previewNode.classList.remove("chat-item__preview--call");
     } else if (chat.contact) {
       const contactPreview = getContactPreviewText(chat.contact);
       previewNode.textContent = contactPreview || "No messages yet";
       previewNode.classList.remove("chat-item__preview--draft");
+      previewNode.classList.remove("chat-item__preview--call");
     } else {
       previewNode.textContent = "No messages yet";
       previewNode.classList.remove("chat-item__preview--draft");
+      previewNode.classList.remove("chat-item__preview--call");
     }
 
     const metaIcons = [];
@@ -6675,6 +6881,317 @@ function updateCallControls(chat) {
   }
 }
 
+function areStringArraysEqual(a = [], b = []) {
+  if (a.length !== b.length) {
+    return false;
+  }
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function mergeCallParticipantNames(...lists) {
+  const seen = new Set();
+  const merged = [];
+  lists
+    .flat()
+    .filter((value) => typeof value === "string")
+    .forEach((value) => {
+      const trimmed = value.trim();
+      if (!trimmed) {
+        return;
+      }
+      const key = trimmed.toLowerCase();
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      merged.push(trimmed);
+    });
+  return merged;
+}
+
+function getCallSession(chat) {
+  if (!chat || typeof chat.callSession !== "object" || !chat.callSession) {
+    return null;
+  }
+
+  const normalizedType =
+    chat.callSession.type === CallType.VIDEO ? CallType.VIDEO : CallType.AUDIO;
+  const normalizedStartedAt =
+    typeof chat.callSession.startedAt === "string" && chat.callSession.startedAt.trim()
+      ? chat.callSession.startedAt
+      : new Date().toISOString();
+  const participantAccountIds = normalizeParticipantAccountIds(
+    Array.isArray(chat.callSession.participantAccountIds)
+      ? chat.callSession.participantAccountIds
+      : []
+  );
+  const participantNames = normalizeGroupParticipants(
+    Array.isArray(chat.callSession.participantNames)
+      ? chat.callSession.participantNames
+      : []
+  );
+
+  return {
+    type: normalizedType,
+    startedAt: normalizedStartedAt,
+    participantAccountIds,
+    participantNames,
+    isOngoing: chat.callSession.isOngoing === false ? false : true,
+  };
+}
+
+// Persist a call session on the chat so group members can rejoin without
+// tearing down state when one participant hangs up locally.
+function ensureChatCallSession(
+  chat,
+  { type, participantAccountIds = [], participantNames = [], startedAt } = {}
+) {
+  if (!chat) {
+    return null;
+  }
+
+  const existing = getCallSession(chat);
+  const nextType = type === CallType.VIDEO ? CallType.VIDEO : existing?.type ?? CallType.AUDIO;
+  const nextStartedAt =
+    typeof startedAt === "string" && startedAt.trim()
+      ? startedAt
+      : existing?.startedAt ?? new Date().toISOString();
+
+  const mergedAccountIds = normalizeParticipantAccountIds([
+    ...(existing?.participantAccountIds ?? []),
+    ...participantAccountIds,
+  ]);
+
+  const resolvedNames = mergeCallParticipantNames(
+    existing?.participantNames ?? [],
+    participantNames
+  );
+
+  mergedAccountIds.forEach((accountId) => {
+    const profile = participantDirectory.get(accountId);
+    if (profile?.displayName) {
+      resolvedNames.push(profile.displayName);
+    } else if (profile?.username) {
+      resolvedNames.push(profile.username);
+    }
+  });
+
+  const normalizedNames = normalizeGroupParticipants(resolvedNames);
+
+  const nextSession = {
+    type: nextType,
+    startedAt: nextStartedAt,
+    participantAccountIds: mergedAccountIds,
+    participantNames: normalizedNames,
+    isOngoing: true,
+  };
+
+  if (existing) {
+    const matchesExisting =
+      existing.type === nextSession.type &&
+      existing.startedAt === nextSession.startedAt &&
+      areStringArraysEqual(existing.participantAccountIds, nextSession.participantAccountIds) &&
+      areStringArraysEqual(existing.participantNames, nextSession.participantNames) &&
+      existing.isOngoing === nextSession.isOngoing;
+    if (matchesExisting) {
+      return existing;
+    }
+  }
+
+  chat.callSession = nextSession;
+  saveState(chats);
+
+  if (activeChatId === chat.id) {
+    renderChatCallBanner(chat);
+  }
+  renderChats(chatSearchInput.value);
+
+  return nextSession;
+}
+
+function isCallSessionEmpty(session) {
+  if (!session) {
+    return true;
+  }
+  const accountCount = Array.isArray(session.participantAccountIds)
+    ? session.participantAccountIds.filter((id) => normalizeAccountId(id)).length
+    : 0;
+  const nameCount = Array.isArray(session.participantNames)
+    ? session.participantNames.filter((name) => typeof name === "string" && name.trim()).length
+    : 0;
+  return accountCount === 0 && nameCount === 0;
+}
+
+function removeParticipantsFromChatSession(
+  chat,
+  { accountIds = [], names = [] } = {}
+) {
+  if (!chat) {
+    return null;
+  }
+
+  const existing = getCallSession(chat);
+  if (!existing) {
+    return null;
+  }
+
+  const removalAccounts = new Set(
+    normalizeParticipantAccountIds(accountIds).map((id) => id.toLowerCase())
+  );
+  const removalNames = new Set(
+    mergeCallParticipantNames(names).map((name) => name.toLowerCase())
+  );
+
+  removalAccounts.forEach((accountId) => {
+    const profile = participantDirectory.get(accountId);
+    if (profile?.displayName) {
+      removalNames.add(profile.displayName.trim().toLowerCase());
+    }
+    if (profile?.username) {
+      removalNames.add(profile.username.trim().toLowerCase());
+    }
+  });
+
+  const remainingAccounts = existing.participantAccountIds.filter((id) => {
+    const normalized = normalizeAccountId(id);
+    if (!normalized) {
+      return false;
+    }
+    return !removalAccounts.has(normalized.toLowerCase());
+  });
+
+  const remainingNames = existing.participantNames.filter((name) => {
+    if (typeof name !== "string") {
+      return false;
+    }
+    const normalized = name.trim();
+    if (!normalized) {
+      return false;
+    }
+    return !removalNames.has(normalized.toLowerCase());
+  });
+
+  if (!remainingAccounts.length && !remainingNames.length) {
+    clearChatCallSession(chat);
+    return null;
+  }
+
+  const nextSession = {
+    ...existing,
+    participantAccountIds: normalizeParticipantAccountIds(remainingAccounts),
+    participantNames: normalizeGroupParticipants(remainingNames),
+    isOngoing: true,
+  };
+
+  if (
+    areStringArraysEqual(existing.participantAccountIds, nextSession.participantAccountIds) &&
+    areStringArraysEqual(existing.participantNames, nextSession.participantNames)
+  ) {
+    return existing;
+  }
+
+  chat.callSession = nextSession;
+  saveState(chats);
+
+  if (activeChatId === chat.id) {
+    renderChatCallBanner(chat);
+  }
+  renderChats(chatSearchInput.value);
+
+  return nextSession;
+}
+
+function clearChatCallSession(chat) {
+  if (!chat || !chat.callSession) {
+    return;
+  }
+
+  delete chat.callSession;
+  saveState(chats);
+
+  if (activeChatId === chat.id) {
+    renderChatCallBanner(chat);
+  }
+  renderChats(chatSearchInput.value);
+}
+
+function applyCallParticipantToSession(
+  chat,
+  { accountId, username, displayName, type, startedAt } = {}
+) {
+  if (!chat) {
+    return null;
+  }
+
+  const normalizedAccountId = normalizeAccountId(accountId);
+  const trimmedDisplayName =
+    typeof displayName === "string" && displayName.trim() ? displayName.trim() : "";
+  const trimmedUsername =
+    typeof username === "string" && username.trim() ? username.trim() : "";
+
+  if (normalizedAccountId) {
+    upsertParticipantProfile(normalizedAccountId, {
+      username: trimmedUsername || undefined,
+      displayName: trimmedDisplayName || undefined,
+    });
+  }
+
+  const namesToRecord = mergeCallParticipantNames(
+    trimmedDisplayName,
+    trimmedUsername
+  );
+
+  const accountsToRecord = normalizedAccountId ? [normalizedAccountId] : [];
+
+  return ensureChatCallSession(chat, {
+    type,
+    startedAt,
+    participantAccountIds: accountsToRecord,
+    participantNames: namesToRecord,
+  });
+}
+
+function pruneActiveCallParticipant({ accountId, name } = {}) {
+  if (!activeCall || !Array.isArray(activeCall.participants)) {
+    return;
+  }
+
+  const removalNames = new Set();
+  if (typeof name === "string" && name.trim()) {
+    removalNames.add(name.trim().toLowerCase());
+  }
+
+  const normalizedAccountId = normalizeAccountId(accountId);
+  if (normalizedAccountId) {
+    const profile = participantDirectory.get(normalizedAccountId);
+    if (profile?.displayName) {
+      removalNames.add(profile.displayName.trim().toLowerCase());
+    }
+    if (profile?.username) {
+      removalNames.add(profile.username.trim().toLowerCase());
+    }
+  }
+
+  if (!removalNames.size) {
+    return;
+  }
+
+  const filtered = activeCall.participants
+    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .filter((value) => value && !removalNames.has(value.toLowerCase()));
+
+  if (!areStringArraysEqual(activeCall.participants, filtered)) {
+    activeCall.participants = filtered;
+    renderCallOverlayParticipants(filtered);
+    updateCallOverlayState();
+  }
+}
+
 function getSelfParticipantName() {
   const profileName =
     typeof activeProfile?.name === "string" && activeProfile.name.trim()
@@ -6796,6 +7313,46 @@ function getPrimaryCallParticipantName(chat) {
   }
 
   return participants[0];
+}
+
+function renderChatCallBanner(chat) {
+  if (!chatCallBannerElement) {
+    return;
+  }
+
+  const session = chat ? getCallSession(chat) : null;
+  if (!session || session.isOngoing === false) {
+    chatCallBannerElement.hidden = true;
+    chatCallBannerElement.setAttribute("aria-hidden", "true");
+    chatCallBannerElement.textContent = "";
+    return;
+  }
+
+  const typeLabel = session.type === CallType.VIDEO ? "Video call" : "Audio call";
+  const participantNames = normalizeGroupParticipants(session.participantNames ?? []);
+  const selfName = getSelfParticipantName();
+  const normalizedSelf = typeof selfName === "string" ? selfName.trim().toLowerCase() : "";
+  const otherParticipants = participantNames.filter((name) => {
+    if (typeof name !== "string") {
+      return false;
+    }
+    const trimmed = name.trim();
+    if (!trimmed) {
+      return false;
+    }
+    if (normalizedSelf && trimmed.toLowerCase() === normalizedSelf) {
+      return false;
+    }
+    return true;
+  });
+
+  const participantLabel = otherParticipants.length
+    ? ` · Participants: ${otherParticipants.join(", ")}`
+    : "";
+
+  chatCallBannerElement.textContent = `${typeLabel} in progress${participantLabel}. Tap the call button to join.`;
+  chatCallBannerElement.hidden = false;
+  chatCallBannerElement.setAttribute("aria-hidden", "false");
 }
 
 function renderChatParticipants(chat) {
@@ -7312,6 +7869,7 @@ function renderChatView(chat) {
 
   if (!chat) {
     renderChatParticipants(null);
+    renderChatCallBanner(null);
     if (exportChatButton) {
       exportChatButton.disabled = true;
       exportChatButton.setAttribute("aria-label", "Export conversation");
@@ -7361,6 +7919,8 @@ function renderChatView(chat) {
   chatHeaderElement.hidden = false;
   chatComposerElement.hidden = false;
   closeEmojiPicker();
+
+  renderChatCallBanner(chat);
 
   if (exportChatButton) {
     exportChatButton.disabled = false;
@@ -8559,6 +9119,21 @@ async function startCall(callType) {
     return;
   }
 
+  if (chat.type === ChatType.GROUP) {
+    const selfAccountId = normalizeAccountId(authState?.user?.id);
+    const participantIds = [...remoteAccountIds];
+    if (selfAccountId) {
+      participantIds.push(selfAccountId);
+    }
+    ensureChatCallSession(chat, {
+      type: callType,
+      participantAccountIds: participantIds,
+      participantNames: mergeCallParticipantNames(getSelfParticipantName()),
+    });
+  } else {
+    clearChatCallSession(chat);
+  }
+
   openCallOverlay({
     chat,
     type: callType,
@@ -8596,7 +9171,12 @@ async function startCall(callType) {
           // Ignore errors from stopping preview tracks.
         }
       });
-      endActiveCall({ reason: "Call unavailable", suppressToast: true, signalRemote: false });
+      endActiveCall({
+        reason: "Call unavailable",
+        suppressToast: true,
+        signalRemote: false,
+        terminateSession: true,
+      });
       return;
     }
 
@@ -8629,7 +9209,12 @@ async function startCall(callType) {
     const emitted = sendCallSignal("call:offer", payload);
     if (!emitted) {
       showToast("Unable to reach the other participant.");
-      endActiveCall({ reason: "Call unavailable", suppressToast: true, signalRemote: false });
+      endActiveCall({
+        reason: "Call unavailable",
+        suppressToast: true,
+        signalRemote: false,
+        terminateSession: true,
+      });
       return;
     }
 
@@ -8644,7 +9229,12 @@ async function startCall(callType) {
     const errorMessage = resolveCallPermissionErrorMessage("start", error);
     showToast(errorMessage);
     const hangupReason = permissionDenied ? "Media permissions denied" : "Call unavailable";
-    endActiveCall({ reason: hangupReason, suppressToast: true, signalRemote: false });
+    endActiveCall({
+      reason: hangupReason,
+      suppressToast: true,
+      signalRemote: false,
+      terminateSession: true,
+    });
   }
 }
 
@@ -9138,6 +9728,28 @@ function markActiveCallConnected() {
 
   if (!activeCall.startedAt) {
     activeCall.startedAt = Date.now();
+  }
+
+  const chat = getChatById(activeCall.chatId);
+  if (chat && chat.type === ChatType.GROUP) {
+    applyCallParticipantToSession(chat, {
+      accountId: authState?.user?.id ?? null,
+      username:
+        typeof authState?.user?.username === "string" && authState.user.username.trim()
+          ? authState.user.username.trim()
+          : "",
+      displayName: getSelfParticipantName(),
+      type: activeCall.type,
+    });
+  }
+
+  const participantNames = mergeCallParticipantNames(
+    activeCall.participants ?? [],
+    getSelfParticipantName()
+  );
+  if (!areStringArraysEqual(activeCall.participants ?? [], participantNames)) {
+    activeCall.participants = participantNames;
+    renderCallOverlayParticipants(participantNames);
   }
 
   setActiveCallState(CallState.CONNECTED);
@@ -10024,16 +10636,34 @@ function closeCallOverlay({ restoreFocus = true, showToastMessage } = {}) {
   }
 }
 
-function endActiveCall({ reason = "Call ended", suppressToast = false, signalRemote = false } = {}) {
+function endActiveCall({
+  reason = "Call ended",
+  suppressToast = false,
+  signalRemote = false,
+  terminateSession,
+  removeSelfOnly,
+} = {}) {
   if (!activeCall) return;
 
-  if (signalRemote && activeCall.chatId) {
-    const payload = { chat_id: activeCall.chatId };
+  const previousCall = activeCall;
+  const isGroupCall = previousCall.chatType === ChatType.GROUP;
+  const defaultTerminateSession = !isGroupCall || !previousCall.startedAt;
+  const shouldTerminateSession =
+    typeof terminateSession === "boolean" ? terminateSession : defaultTerminateSession;
+  // Unless explicitly told otherwise, keep the shared group call session alive so
+  // other participants remain listed while we drop ourselves.
+  const shouldRemoveSelfOnly =
+    typeof removeSelfOnly === "boolean"
+      ? removeSelfOnly
+      : isGroupCall && !shouldTerminateSession;
+
+  if (signalRemote && previousCall.chatId) {
+    const payload = { chat_id: previousCall.chatId };
     if (reason) {
       payload.reason = reason;
     }
-    if (Array.isArray(activeCall.remoteAccountIds) && activeCall.remoteAccountIds.length) {
-      payload.recipient_ids = activeCall.remoteAccountIds;
+    if (Array.isArray(previousCall.remoteAccountIds) && previousCall.remoteAccountIds.length) {
+      payload.recipient_ids = previousCall.remoteAccountIds;
     }
     sendCallSignal("call:hangup", payload);
   }
@@ -10042,6 +10672,33 @@ function endActiveCall({ reason = "Call ended", suppressToast = false, signalRem
     restoreFocus: true,
     showToastMessage: suppressToast ? undefined : reason,
   });
+
+  const chat = previousCall.chatId ? getChatById(previousCall.chatId) : null;
+  if (!chat) {
+    return;
+  }
+
+  if (chat.type === ChatType.GROUP) {
+    if (shouldTerminateSession) {
+      clearChatCallSession(chat);
+      return;
+    }
+    if (shouldRemoveSelfOnly) {
+      removeParticipantsFromChatSession(chat, {
+        accountIds: [authState?.user?.id ?? null],
+        names: [getSelfParticipantName()],
+      });
+      const session = getCallSession(chat);
+      if (!session || isCallSessionEmpty(session)) {
+        clearChatCallSession(chat);
+      }
+    }
+    return;
+  }
+
+  if (shouldTerminateSession) {
+    clearChatCallSession(chat);
+  }
 }
 
 function handleCallControl(event) {
