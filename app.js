@@ -1782,6 +1782,10 @@ function updateChatParticipantsFromPayload(chat, payload, message) {
     message.senderDisplayName = authorLabel;
   }
 
+  if (mutated && chat.type === ChatType.GROUP && isSelf) {
+    sendChatParticipantsUpdate(chat);
+  }
+
   return mutated;
 }
 
@@ -3623,7 +3627,29 @@ function handleRealtimeChatHistory(payload) {
 
   realtimeState.joinedChats.add(chatId);
   const messages = Array.isArray(payload.messages) ? payload.messages : [];
+  const participants = Array.isArray(payload.participants) ? payload.participants : [];
+  const participantAccountIds = Array.isArray(payload.participant_account_ids)
+    ? payload.participant_account_ids
+    : [];
+
+  let participantMetadata = { chat: null, mutated: false };
+  if (participants.length || participantAccountIds.length) {
+    participantMetadata = applyServerParticipantMetadata(
+      chatId,
+      participants,
+      participantAccountIds
+    );
+  }
+
   applyServerMessages(chatId, messages, { replaceExisting: true, origin: "history" });
+
+  if (participantMetadata.mutated && participantMetadata.chat) {
+    saveState(chats);
+    renderChats(chatSearchInput.value);
+    if (activeChatId === participantMetadata.chat.id) {
+      renderChatView(participantMetadata.chat);
+    }
+  }
 }
 
 function handleRealtimeChatWallpaperUpdate(payload) {
@@ -3683,6 +3709,65 @@ function handleRealtimeChatWallpaperUpdate(payload) {
     intent: ToastIntent.INFO,
     duration: 3200,
   });
+}
+
+function handleRealtimeChatParticipantsUpdate(payload) {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+
+  const chatId = normalizeChatIdentifier(payload.chat_id);
+  if (!chatId) {
+    return;
+  }
+
+  const participants = Array.isArray(payload.participants) ? payload.participants : [];
+  const participantAccountIds = Array.isArray(payload.participant_account_ids)
+    ? payload.participant_account_ids
+    : [];
+
+  const { chat, mutated } = applyServerParticipantMetadata(
+    chatId,
+    participants,
+    participantAccountIds
+  );
+
+  if (!chat) {
+    return;
+  }
+
+  if (mutated) {
+    saveState(chats);
+    renderChats(chatSearchInput.value);
+    if (activeChatId === chat.id) {
+      renderChatView(chat);
+    }
+  }
+
+  const updatedBy = normalizeAccountId(payload.updated_by);
+  const currentUserId = normalizeAccountId(authState?.user?.id);
+  if (updatedBy && currentUserId && updatedBy === currentUserId) {
+    return;
+  }
+
+  const updatedByUsername =
+    typeof payload.updated_by_username === "string" && payload.updated_by_username.trim()
+      ? payload.updated_by_username.trim()
+      : "";
+
+  if (updatedByUsername) {
+    showToast({
+      message: `${updatedByUsername} updated the participant list.`,
+      intent: ToastIntent.INFO,
+      duration: 3200,
+    });
+  } else if (mutated) {
+    showToast({
+      message: "Participant list updated.",
+      intent: ToastIntent.INFO,
+      duration: 2800,
+    });
+  }
 }
 
 function handleRealtimeMessage(payload) {
@@ -3818,6 +3903,7 @@ function ensureRealtimeSocket() {
     socket.on("chatHistory", handleRealtimeChatHistory);
     socket.on("message", handleRealtimeMessage);
     socket.on("chatWallpaper", handleRealtimeChatWallpaperUpdate);
+    socket.on("chatParticipantsUpdate", handleRealtimeChatParticipantsUpdate);
     socket.on("messagesRead", handleRealtimeMessagesRead);
     socket.on("messageError", handleRealtimeMessageError);
     socket.on("chatError", handleRealtimeChatError);
@@ -6533,6 +6619,125 @@ async function ensureParticipantProfiles(accountIds = []) {
   await lookupPromise;
 }
 
+function applyServerParticipantMetadata(chatId, participants, participantAccountIds) {
+  const normalizedChatId = normalizeChatIdentifier(chatId);
+  if (!normalizedChatId) {
+    return { chat: null, mutated: false };
+  }
+
+  let chat = chats.find((candidate) => candidate.id === normalizedChatId);
+  if (!chat) {
+    chat = bootstrapChatFromServerPayload(normalizedChatId, []);
+    if (!chat) {
+      return { chat: null, mutated: false };
+    }
+  }
+
+  if (!Array.isArray(chat.participants)) {
+    chat.participants = [];
+  }
+  if (!Array.isArray(chat.participantAccountIds)) {
+    chat.participantAccountIds = [];
+  }
+
+  const normalizedNames = normalizeGroupParticipants(participants);
+  const normalizedAccountIds = normalizeParticipantAccountIds(participantAccountIds);
+
+  let mutated = false;
+
+  const existingNames = normalizeGroupParticipants(chat.participants);
+  if (
+    normalizedNames.length !== existingNames.length ||
+    existingNames.some((value, index) => value !== normalizedNames[index])
+  ) {
+    chat.participants = normalizedNames;
+    mutated = true;
+  }
+
+  const existingAccountIds = normalizeParticipantAccountIds(chat.participantAccountIds);
+  if (
+    normalizedAccountIds.length !== existingAccountIds.length ||
+    existingAccountIds.some((value, index) => value !== normalizedAccountIds[index])
+  ) {
+    chat.participantAccountIds = normalizedAccountIds;
+    mutated = true;
+  }
+
+  if (normalizedAccountIds.length) {
+    ensureParticipantProfiles(normalizedAccountIds);
+  }
+
+  if (chat.type !== ChatType.GROUP) {
+    const promoted = maybePromoteChatToGroup(chat);
+    if (promoted) {
+      mutated = true;
+    }
+  }
+
+  if (ensureSelfParticipant(chat)) {
+    mutated = true;
+  }
+
+  if (chat.type === ChatType.GROUP) {
+    const nextStatus = deriveGroupStatus(chat.participants, chat.description);
+    if (nextStatus !== chat.status) {
+      chat.status = nextStatus;
+      mutated = true;
+    }
+  }
+
+  return { chat, mutated };
+}
+
+function sendChatParticipantsUpdate(chat) {
+  if (!chat || chat.type !== ChatType.GROUP) {
+    return;
+  }
+  if (!authState || !authState.token) {
+    return;
+  }
+
+  const socket = ensureRealtimeSocket();
+  if (!socket) {
+    return;
+  }
+
+  const normalizedChatId = normalizeChatIdentifier(chat.id);
+  if (!normalizedChatId) {
+    return;
+  }
+
+  const participants = normalizeGroupParticipants(chat.participants);
+  const participantAccountIds = normalizeParticipantAccountIds(chat.participantAccountIds);
+
+  if (!participants.length && !participantAccountIds.length) {
+    return;
+  }
+
+  const payload = {
+    chat_id: normalizedChatId,
+    participants,
+    participant_account_ids: participantAccountIds,
+  };
+
+  realtimeState.pendingChatJoins.add(normalizedChatId);
+
+  if (!realtimeState.isAuthenticated || !socket.connected) {
+    queueRealtimeEmit("chatParticipantsUpdate", payload, normalizedChatId);
+    syncRealtimeConnection();
+    return;
+  }
+
+  flushPendingChatJoins();
+
+  try {
+    socket.emit("chatParticipantsUpdate", payload);
+  } catch (error) {
+    console.error("Failed to send participant update", error);
+    queueRealtimeEmit("chatParticipantsUpdate", payload, normalizedChatId);
+  }
+}
+
 function handleParticipantChipClick(event) {
   if (!chatParticipantsElement) {
     return;
@@ -7129,6 +7334,10 @@ function createChat(nameInput, options = {}) {
     newChat.contact = storedContact ?? normalizedContact;
   }
 
+  if (normalizedType === ChatType.GROUP) {
+    ensureSelfParticipant(newChat);
+  }
+
   const sanitizedStatus = sanitizeStatus(statusOverride);
   if (sanitizedStatus) {
     newChat.status = sanitizedStatus;
@@ -7146,6 +7355,9 @@ function createChat(nameInput, options = {}) {
   }
   chatSearchInput.value = "";
   openChat(newChat.id);
+  if (normalizedType === ChatType.GROUP) {
+    sendChatParticipantsUpdate(newChat);
+  }
   return newChat;
 }
 
@@ -9072,10 +9284,12 @@ function handleManageParticipantsConfirm() {
       phone: false,
     };
   }
+  ensureSelfParticipant(chat);
   chat.status = deriveGroupStatus(chat.participants, chat.description);
   saveState(chats);
   renderChats(chatSearchInput.value);
   renderChatView(chat);
+  sendChatParticipantsUpdate(chat);
   closeManageParticipantsModal();
 
   const count = addedNames.length;
