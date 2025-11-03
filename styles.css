@@ -813,6 +813,23 @@ body.auth-locked .app {
   gap: 0.35rem;
 }
 
+.message__author {
+  display: none;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  opacity: 0.85;
+  margin-bottom: 0.1rem;
+}
+
+.message__author:not([hidden]) {
+  display: block;
+}
+
+.message--outgoing .message__author {
+  text-align: right;
+}
+
 .message--outgoing .message__bubble {
   background: var(--bubble-out);
   border-bottom-right-radius: 0.3rem;
@@ -924,14 +941,15 @@ body.auth-locked .app {
 
 .message__link-preview {
   display: grid;
-  grid-template-columns: 120px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto 1fr;
   width: 100%;
   text-decoration: none;
   color: inherit;
 }
 
 .message__link-preview--no-thumbnail {
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 1fr;
 }
 
 .message__link-preview-thumbnail {
@@ -940,6 +958,7 @@ body.auth-locked .app {
   background: rgba(255, 255, 255, 0.06);
   aspect-ratio: 16 / 9;
   overflow: hidden;
+  grid-row: 1 / 2;
 }
 
 :root[data-theme="light"] .message__link-preview-thumbnail {
@@ -968,6 +987,11 @@ body.auth-locked .app {
   padding: 0.75rem;
   display: grid;
   gap: 0.35rem;
+  grid-row: 2 / 3;
+}
+
+.message__link-preview--no-thumbnail .message__link-preview-body {
+  grid-row: 1 / 2;
 }
 
 .message__link-preview-title {
